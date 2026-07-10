@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="EnglishFlow icon">
+  <rect width="512" height="512" rx="96" fill="#f5f5f7"/>
+  <path d="M116 266c0-78 63-141 141-141 65 0 120 44 136 104" fill="none" stroke="#0071e3" stroke-width="34" stroke-linecap="round"/>
+  <path d="M396 246c0 78-63 141-141 141-65 0-120-44-136-104" fill="none" stroke="#2f8f5b" stroke-width="34" stroke-linecap="round"/>
+  <path d="M146 232h54l28 76 55-154 36 112h48" fill="none" stroke="#1d1d1f" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
