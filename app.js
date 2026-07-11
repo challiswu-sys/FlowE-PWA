@@ -14,6 +14,51 @@ let activeAudioUrl = null;
 let segmentTimer = null;
 let recognition = null;
 let activeVoiceButton = null;
+let practiceClock = null;
+let lastPracticeTick = Date.now();
+let ieltsRound = 0;
+let practiceSummaryOpen = false;
+let practiceSummaryMode = "month";
+let practiceSummaryCursor = new Date();
+
+const IELTS_QUESTION_BANK = [
+  {
+    prompt: "Choose the most natural sentence.",
+    options: ["I have a hard time understanding fast speech.", "I am difficult to understand fast speech.", "I have hard time to understand fast speech."],
+    answer: 0,
+    note: "Use have a hard time followed by an -ing form."
+  },
+  {
+    prompt: "If I ___ more time, I would practise speaking every day.",
+    options: ["have", "had", "will have"],
+    answer: 1,
+    note: "For a present unreal condition, use if + past tense and would in the main clause."
+  },
+  {
+    prompt: "Which collocation is correct?",
+    options: ["make progress", "do progress", "create progress"],
+    answer: 0,
+    note: "Make progress is the standard collocation."
+  },
+  {
+    prompt: "By the time I arrived, the meeting ___.",
+    options: ["had started", "has started", "starts"],
+    answer: 0,
+    note: "Use the past perfect for an action completed before another past action."
+  },
+  {
+    prompt: "Which phrase sounds most natural?",
+    options: ["different from mine", "different with mine", "different as mine"],
+    answer: 0,
+    note: "Different from is the most widely accepted form."
+  },
+  {
+    prompt: "I’m looking forward to ___ from you.",
+    options: ["hearing", "hear", "have heard"],
+    answer: 0,
+    note: "The to in look forward to is a preposition, so it takes a noun or an -ing form."
+  }
+];
 
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
@@ -23,14 +68,16 @@ document.addEventListener("DOMContentLoaded", () => {
   bindNavigation();
   bindForms();
   bindActions();
+  bindProfileForm();
   switchView(initialView());
   renderAll();
   renderIcons();
+  startPracticeClock();
 });
 
 function initialView() {
   const hashView = window.location.hash.replace("#", "");
-  return hashView && $(`[data-view="${hashView}"]`) ? hashView : "materials";
+  return hashView && $(`[data-view="${hashView}"]`) ? hashView : "home";
 }
 
 function loadState() {
@@ -42,7 +89,10 @@ function loadState() {
         materials: parsed.materials || [],
         chunks: parsed.chunks || [],
         mistakes: parsed.mistakes || [],
-        attempts: parsed.attempts || []
+        attempts: parsed.attempts || [],
+        practiceLog: parsed.practiceLog || {},
+        profile: parsed.profile || {},
+        ieltsHistory: parsed.ieltsHistory || []
       });
     } catch (error) {
       console.warn("Failed to parse saved state", error);
@@ -53,7 +103,10 @@ function loadState() {
     materials: [],
     chunks: [],
     mistakes: [],
-    attempts: []
+    attempts: [],
+    practiceLog: {},
+    profile: {},
+    ieltsHistory: []
   });
 }
 
@@ -63,10 +116,37 @@ function normalizeState(nextState) {
 
   return {
     materials,
-    chunks: (nextState.chunks || []).filter((chunk) => !blockedSourceIds.has(chunk.sourceMaterialId)),
-    mistakes: (nextState.mistakes || []).filter((mistake) => !blockedSourceIds.has(mistake.sourceMaterialId)),
-    attempts: nextState.attempts || []
+    chunks: (nextState.chunks || []).filter((chunk) => !blockedSourceIds.has(chunk.sourceMaterialId)).map((chunk) => ({ ...chunk, tag: translateLegacyLabel(chunk.tag) })),
+    mistakes: (nextState.mistakes || []).filter((mistake) => !blockedSourceIds.has(mistake.sourceMaterialId)).map((mistake) => ({ ...mistake, category: translateLegacyLabel(mistake.category) })),
+    attempts: nextState.attempts || [],
+    practiceLog: nextState.practiceLog || {},
+    profile: {
+      name: "",
+      age: "",
+      industry: "",
+      role: "",
+      currentLevel: "IELTS 6.0–6.5",
+      targetLevel: "IELTS 7.0",
+      ...(nextState.profile || {})
+    },
+    ieltsHistory: nextState.ieltsHistory || []
   };
+}
+
+function translateLegacyLabel(value = "") {
+  const labels = {
+    "口语": "Speaking",
+    "听力高频": "Listening",
+    "学术": "Academic",
+    "工作": "Work",
+    "逻辑连接": "Linking",
+    "我老用错": "Frequent error",
+    "语法": "Grammar",
+    "搭配": "Collocation",
+    "听力": "Listening",
+    "表达升级": "Expression upgrade"
+  };
+  return labels[value] || value;
 }
 
 function saveState() {
@@ -86,6 +166,7 @@ function switchView(view) {
   activeView = view;
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.view === view));
   $$(".nav-button").forEach((button) => button.classList.toggle("is-active", button.dataset.nav === view));
+  $$(".mobile-tabbar button").forEach((button) => button.classList.toggle("is-active", button.dataset.nav === view));
   window.history.replaceState(null, "", `#${view}`);
   renderAll();
 }
@@ -95,7 +176,7 @@ function bindForms() {
     const file = event.target.files?.[0];
     if (!file) return;
     $("#transcriptText").value = await file.text();
-    toast("文稿已读取");
+    toast("Transcript loaded");
   });
 
   $("#materialForm").addEventListener("submit", async (event) => {
@@ -106,7 +187,7 @@ function bindForms() {
     const transcript = $("#transcriptText").value.trim();
 
     if (!title || !transcript) {
-      toast("请填写标题和 transcript");
+      toast("Add a title and transcript first");
       return;
     }
 
@@ -131,7 +212,7 @@ function bindForms() {
     saveState();
     event.target.reset();
     renderAll();
-    toast("素材已保存");
+    toast("Material saved");
   });
 }
 
@@ -143,10 +224,24 @@ function bindActions() {
     state.mistakes = state.mistakes.filter((mistake) => !mistake.mastered);
     saveState();
     renderAll();
-    toast("已归档掌握项");
+    toast("Mastered items archived");
   });
 
   $("#exportButton").addEventListener("click", exportData);
+
+  $("#addMaterialButton")?.addEventListener("click", () => {
+    window.requestAnimationFrame(() => {
+      const importer = $("#materialImporter");
+      if (importer) importer.open = true;
+      $("#materialTitle")?.focus();
+    });
+  });
+
+  $("#practiceSummaryToggle")?.addEventListener("click", () => {
+    practiceSummaryOpen = !practiceSummaryOpen;
+    renderHomeDashboard();
+    renderIcons();
+  });
 
   $("#backupInput").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
@@ -157,7 +252,10 @@ function bindActions() {
         materials: imported.materials || [],
         chunks: imported.chunks || [],
         mistakes: imported.mistakes || [],
-        attempts: imported.attempts || []
+        attempts: imported.attempts || [],
+        practiceLog: imported.practiceLog || {},
+        profile: imported.profile || {},
+        ieltsHistory: imported.ieltsHistory || []
       });
       activeMaterialId = state.materials[0]?.id || null;
       activeChunkId = state.chunks[0]?.id || null;
@@ -165,9 +263,9 @@ function bindActions() {
       latestFeedback = null;
       saveState();
       renderAll();
-      toast("备份已导入");
+      toast("Backup imported");
     } catch (error) {
-      toast("备份文件无法读取");
+      toast("This backup file could not be read");
     }
     event.target.value = "";
   });
@@ -177,14 +275,448 @@ function renderAll() {
   renderStats();
   renderMaterials();
   renderChunks();
+  renderSentenceStudio();
   renderMistakes();
+  renderHomeDashboard();
+  renderProfile();
   renderIcons();
 }
 
 function renderStats() {
-  $("#materialCount").textContent = state.materials.length;
-  $("#chunkCount").textContent = state.chunks.length;
-  $("#mistakeCount").textContent = state.mistakes.filter((item) => !item.mastered).length;
+  const materialCount = state.materials.length;
+  const chunkCount = state.chunks.length;
+  const mistakeCount = state.mistakes.filter((item) => !item.mastered).length;
+  const attemptCount = state.attempts.length;
+
+  setText("#materialCount", materialCount);
+  setText("#chunkCount", chunkCount);
+  setText("#mistakeCount", mistakeCount);
+  setText("#homeMaterialCount", materialCount);
+  setText("#homeChunkCount", chunkCount);
+  setText("#homeMistakeCount", mistakeCount);
+  setText("#homeMaterialCountCard", materialCount);
+  setText("#homeChunkCountCard", chunkCount);
+  setText("#homeMistakeCountCard", mistakeCount);
+  setText("#homeAttemptCountCard", attemptCount);
+  setText("#attemptCount", attemptCount);
+  setText("#sentenceChunkCount", chunkCount);
+}
+
+function bindProfileForm() {
+  const form = $("#profileForm");
+  if (!form) return;
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.profile = {
+      name: $("#profileName").value.trim(),
+      age: $("#profileAge").value.trim(),
+      industry: $("#profileIndustry").value.trim(),
+      role: $("#profileRole").value.trim(),
+      currentLevel: $("#profileCurrentLevel").value.trim() || "IELTS 6.0–6.5",
+      targetLevel: $("#profileTargetLevel").value.trim() || "IELTS 7.0"
+    };
+    saveState();
+    renderHomeDashboard();
+    renderProfile();
+    toast("Profile saved");
+  });
+}
+
+function renderHomeDashboard() {
+  const now = new Date();
+  setText("#todayLabel", new Intl.DateTimeFormat("en-GB", { month: "long", day: "numeric", weekday: "long" }).format(now));
+
+  const todaySeconds = Number(state.practiceLog[dateKey(now)] || 0);
+  setText("#todayMinutes", Math.min(60, Math.floor(todaySeconds / 60)));
+
+  const strip = $("#weekStrip");
+  if (!strip) return;
+  const monday = startOfWeek(now);
+  const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  strip.innerHTML = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + index);
+    const seconds = Number(state.practiceLog[dateKey(day)] || 0);
+    const progress = Math.min(100, Math.round((seconds / 3600) * 100));
+    const minutes = Math.floor(seconds / 60);
+    const isToday = dateKey(day) === dateKey(now);
+    return `
+      <article class="day-progress ${isToday ? "is-today" : ""}" aria-label="${formatFullDate(day)}, ${minutes} practice minutes">
+        <span class="day-name">${weekdayNames[index]}</span>
+        <span class="progress-ring" style="--progress:${progress}">
+          <span>${day.getDate()}</span>
+        </span>
+        <small>${minutes ? `${minutes}m` : "–"}</small>
+      </article>
+    `;
+  }).join("");
+
+  const toggle = $("#practiceSummaryToggle");
+  const insights = $("#practiceInsights");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(practiceSummaryOpen));
+    toggle.classList.toggle("is-open", practiceSummaryOpen);
+    const label = $("span", toggle);
+    if (label) label.textContent = practiceSummaryOpen ? "Less" : "More";
+  }
+  if (insights) {
+    insights.hidden = !practiceSummaryOpen;
+    if (practiceSummaryOpen) renderPracticeInsights(insights);
+  }
+
+  renderFrequentMaterials();
+}
+
+function renderFrequentMaterials() {
+  const container = $("#frequentMaterialsPreview");
+  if (!container) return;
+
+  const attemptCountByMaterial = new Map();
+  state.attempts.forEach((attempt) => {
+    const chunk = state.chunks.find((item) => item.id === attempt.chunkId);
+    const materialId = chunk?.sourceMaterialId;
+    if (materialId) attemptCountByMaterial.set(materialId, (attemptCountByMaterial.get(materialId) || 0) + 1);
+  });
+
+  const materials = [...state.materials]
+    .sort((a, b) => {
+      const usageDifference = (attemptCountByMaterial.get(b.id) || 0) - (attemptCountByMaterial.get(a.id) || 0);
+      return usageDifference || new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    })
+    .slice(0, 3);
+
+  container.innerHTML = Array.from({ length: 3 }, (_, index) => {
+    const material = materials[index];
+    if (!material) {
+      return `<span class="material-preview placeholder-${index + 1}" aria-hidden="true"><span class="preview-number">0${index + 1}</span></span>`;
+    }
+    const poster = material.posterPath
+      ? `<img src="${escapeAttribute(material.posterPath)}" alt="">`
+      : `<span class="preview-letter">${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
+    const mediaType = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
+    return `
+      <span class="material-preview material-tone-${index + 1}">
+        ${poster}
+        <span class="preview-caption"><small>${mediaType}</small><strong>${escapeHtml(material.title)}</strong></span>
+      </span>
+    `;
+  }).join("");
+}
+
+function renderPracticeInsights(container) {
+  const cursor = new Date(practiceSummaryCursor);
+  const title = practiceSummaryMode === "week"
+    ? formatWeekRange(cursor)
+    : practiceSummaryMode === "year"
+      ? `${cursor.getFullYear()}`
+      : new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(cursor);
+
+  container.innerHTML = `
+    <div class="summary-toolbar">
+      <div class="summary-tabs" role="tablist" aria-label="Practice summary range">
+        ${[
+          ["week", "Week"],
+          ["month", "Month"],
+          ["year", "Year"]
+        ].map(([value, label]) => `
+          <button type="button" role="tab" data-summary-mode="${value}" aria-selected="${practiceSummaryMode === value}">${label}</button>
+        `).join("")}
+      </div>
+      <div class="period-switcher">
+        <button type="button" data-summary-shift="-1" aria-label="Previous period" title="Previous period"><i data-lucide="chevron-left"></i></button>
+        <strong>${title}</strong>
+        <button type="button" data-summary-shift="1" aria-label="Next period" title="Next period"><i data-lucide="chevron-right"></i></button>
+      </div>
+    </div>
+    <div class="summary-visual">
+      ${practiceSummaryMode === "week" ? renderWeekSummary(cursor) : practiceSummaryMode === "year" ? renderYearSummary(cursor) : renderMonthCalendar(cursor)}
+    </div>
+    ${renderPeriodStats(cursor, practiceSummaryMode)}
+  `;
+
+  $$('[data-summary-mode]', container).forEach((button) => {
+    button.addEventListener("click", () => {
+      practiceSummaryMode = button.dataset.summaryMode;
+      renderPracticeInsights(container);
+      renderIcons();
+    });
+  });
+
+  $$('[data-summary-shift]', container).forEach((button) => {
+    button.addEventListener("click", () => {
+      const direction = Number(button.dataset.summaryShift);
+      if (practiceSummaryMode === "week") practiceSummaryCursor.setDate(practiceSummaryCursor.getDate() + direction * 7);
+      if (practiceSummaryMode === "month") practiceSummaryCursor.setMonth(practiceSummaryCursor.getMonth() + direction);
+      if (practiceSummaryMode === "year") practiceSummaryCursor.setFullYear(practiceSummaryCursor.getFullYear() + direction);
+      renderPracticeInsights(container);
+      renderIcons();
+    });
+  });
+
+  $$('[data-open-month]', container).forEach((button) => {
+    button.addEventListener("click", () => {
+      practiceSummaryCursor = new Date(practiceSummaryCursor.getFullYear(), Number(button.dataset.openMonth), 1);
+      practiceSummaryMode = "month";
+      renderPracticeInsights(container);
+      renderIcons();
+    });
+  });
+}
+
+function renderWeekSummary(cursor) {
+  const monday = startOfWeek(cursor);
+  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return `
+    <div class="week-detail-grid">
+      ${Array.from({ length: 7 }, (_, index) => {
+        const day = new Date(monday);
+        day.setDate(monday.getDate() + index);
+        const seconds = Number(state.practiceLog[dateKey(day)] || 0);
+        const progress = Math.min(100, Math.round(seconds / 36));
+        return `
+          <article class="week-detail-day">
+            <span>${labels[index]}</span>
+            <strong>${day.getMonth() + 1}/${day.getDate()}</strong>
+            <div class="summary-progress"><i style="width:${progress}%"></i></div>
+            <small>${Math.floor(seconds / 60)} min</small>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderMonthCalendar(cursor) {
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const leading = (firstDay.getDay() + 6) % 7;
+  const cells = [
+    ...Array.from({ length: leading }, () => `<span class="calendar-day is-empty"></span>`),
+    ...Array.from({ length: daysInMonth }, (_, index) => {
+      const day = new Date(year, month, index + 1);
+      const seconds = Number(state.practiceLog[dateKey(day)] || 0);
+      const progress = Math.min(100, Math.round(seconds / 36));
+      const isToday = dateKey(day) === dateKey(new Date());
+      return `
+        <article class="calendar-day ${isToday ? "is-today" : ""}" aria-label="${formatFullDate(day)}, ${Math.floor(seconds / 60)} practice minutes">
+          <span class="mini-ring" style="--progress:${progress}"><b>${index + 1}</b></span>
+          <small>${seconds ? `${Math.floor(seconds / 60)}m` : ""}</small>
+        </article>
+      `;
+    })
+  ];
+  return `
+    <div class="calendar-weekdays">${["M", "T", "W", "T", "F", "S", "S"].map((day) => `<span>${day}</span>`).join("")}</div>
+    <div class="month-calendar">${cells.join("")}</div>
+  `;
+}
+
+function renderYearSummary(cursor) {
+  const year = cursor.getFullYear();
+  return `
+    <div class="year-grid">
+      ${Array.from({ length: 12 }, (_, month) => {
+        const stats = getRangeStats(new Date(year, month, 1), new Date(year, month + 1, 0));
+        const progress = Math.min(100, Math.round((stats.totalSeconds / (stats.daysInRange * 3600)) * 100));
+        return `
+          <button class="year-month" type="button" data-open-month="${month}">
+            <span>${new Intl.DateTimeFormat("en-GB", { month: "short" }).format(new Date(year, month, 1))}</span>
+            <strong>${formatDuration(stats.totalSeconds)}</strong>
+            <div class="summary-progress"><i style="width:${progress}%"></i></div>
+            <small>${stats.activeDays} active days</small>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderPeriodStats(cursor, mode) {
+  let start;
+  let end;
+  let label;
+  if (mode === "week") {
+    start = startOfWeek(cursor);
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    label = "Weekly Summary";
+  } else if (mode === "year") {
+    start = new Date(cursor.getFullYear(), 0, 1);
+    end = new Date(cursor.getFullYear(), 11, 31);
+    label = "Yearly Summary";
+  } else {
+    start = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    end = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    label = "Monthly Summary";
+  }
+  const stats = getRangeStats(start, end);
+  return `
+    <section class="period-summary" aria-label="${label}">
+      <div class="period-summary-head">
+        <div><p class="section-label">Practice report</p><h3>${label}</h3></div>
+        <span>60-minute daily goal</span>
+      </div>
+      <div class="summary-metrics">
+        <article><strong>${formatDuration(stats.totalSeconds)}</strong><span>Total practice</span></article>
+        <article><strong>${stats.activeDays}</strong><span>Active days</span></article>
+        <article><strong>${stats.completedDays}</strong><span>Goals completed</span></article>
+        <article><strong>${stats.longestStreak}</strong><span>Longest streak</span></article>
+      </div>
+    </section>
+  `;
+}
+
+function getRangeStats(start, end) {
+  let totalSeconds = 0;
+  let activeDays = 0;
+  let completedDays = 0;
+  let longestStreak = 0;
+  let currentStreak = 0;
+  let daysInRange = 0;
+  const day = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  while (day <= last) {
+    const seconds = Number(state.practiceLog[dateKey(day)] || 0);
+    daysInRange += 1;
+    totalSeconds += seconds;
+    if (seconds > 0) {
+      activeDays += 1;
+      currentStreak += 1;
+      longestStreak = Math.max(longestStreak, currentStreak);
+    } else {
+      currentStreak = 0;
+    }
+    if (seconds >= 3600) completedDays += 1;
+    day.setDate(day.getDate() + 1);
+  }
+  return { totalSeconds, activeDays, completedDays, longestStreak, daysInRange };
+}
+
+function formatDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours} hr`;
+}
+
+function formatWeekRange(date) {
+  const start = startOfWeek(date);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const startLabel = new Intl.DateTimeFormat("en-GB", { month: "short", day: "numeric" }).format(start);
+  const endLabel = new Intl.DateTimeFormat("en-GB", { month: "short", day: "numeric" }).format(end);
+  return `${startLabel} – ${endLabel}`;
+}
+
+function renderProfile() {
+  if (!$("#profileForm")) return;
+  $("#profileName").value = state.profile.name || "";
+  $("#profileAge").value = state.profile.age || "";
+  $("#profileIndustry").value = state.profile.industry || "";
+  $("#profileRole").value = state.profile.role || "";
+  $("#profileCurrentLevel").value = state.profile.currentLevel || "IELTS 6.0–6.5";
+  $("#profileTargetLevel").value = state.profile.targetLevel || "IELTS 7.0";
+  setText("#profileLevelBadge", state.profile.currentLevel || "IELTS 6.0–6.5");
+  setText("#ieltsTestCount", state.ieltsHistory.length);
+  renderIeltsQuiz();
+}
+
+function renderIeltsQuiz() {
+  const container = $("#ieltsQuiz");
+  if (!container) return;
+  const start = (ieltsRound * 3) % IELTS_QUESTION_BANK.length;
+  const questions = Array.from({ length: 3 }, (_, index) => IELTS_QUESTION_BANK[(start + index) % IELTS_QUESTION_BANK.length]);
+  container.innerHTML = `
+    <form id="ieltsQuizForm" class="quiz-form">
+      ${questions.map((question, index) => `
+        <fieldset class="quiz-question">
+          <legend><span>${index + 1}</span>${escapeHtml(question.prompt)}</legend>
+          ${question.options.map((option, optionIndex) => `
+            <label class="quiz-option">
+              <input type="radio" name="question-${index}" value="${optionIndex}">
+              <span>${escapeHtml(option)}</span>
+            </label>
+          `).join("")}
+        </fieldset>
+      `).join("")}
+      <div class="button-row">
+        <button class="primary-button" type="submit"><i data-lucide="check-circle-2"></i><span>View Results</span></button>
+        <button class="secondary-button" type="button" id="nextIeltsTest"><i data-lucide="shuffle"></i><span>New Questions</span></button>
+      </div>
+      <div id="ieltsResult" class="ielts-result" aria-live="polite"></div>
+    </form>
+  `;
+
+  $("#ieltsQuizForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const answerNodes = questions.map((_, index) => event.target.querySelector(`input[name="question-${index}"]:checked`));
+    if (answerNodes.some((node) => !node)) {
+      toast("Answer all three questions first");
+      return;
+    }
+    const answers = answerNodes.map((node) => Number(node.value));
+    const score = answers.reduce((total, answer, index) => total + (answer === questions[index].answer ? 1 : 0), 0);
+    const estimate = score === 3 ? "7.0+" : score === 2 ? "6.0–6.5" : score === 1 ? "5.5–6.0" : "Foundation review";
+    state.ieltsHistory.unshift({ id: createId("test"), score, estimate, createdAt: new Date().toISOString() });
+    saveState();
+    setText("#ieltsTestCount", state.ieltsHistory.length);
+    $("#ieltsResult").innerHTML = `
+      <strong>${score} / 3 · Indicative level ${estimate}</strong>
+      <p>${questions.map((question, index) => `${index + 1}. ${answers[index] === question.answer ? "Correct" : question.note}`).join("<br>")}</p>
+      <small>This mini test tracks trends; it is not an official IELTS score.</small>
+    `;
+  });
+
+  $("#nextIeltsTest").addEventListener("click", () => {
+    ieltsRound += 1;
+    renderIeltsQuiz();
+    renderIcons();
+  });
+}
+
+function startPracticeClock() {
+  if (practiceClock) window.clearInterval(practiceClock);
+  lastPracticeTick = Date.now();
+  practiceClock = window.setInterval(() => {
+    const now = Date.now();
+    const elapsed = Math.min(30, Math.max(0, Math.round((now - lastPracticeTick) / 1000)));
+    lastPracticeTick = now;
+    if (document.hidden || activeView === "profile") return;
+    const key = dateKey(new Date());
+    state.practiceLog[key] = Number(state.practiceLog[key] || 0) + elapsed;
+    saveState();
+    renderHomeDashboard();
+  }, 30000);
+
+  document.addEventListener("visibilitychange", () => {
+    lastPracticeTick = Date.now();
+  });
+}
+
+function startOfWeek(date) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = result.getDay() || 7;
+  result.setDate(result.getDate() - day + 1);
+  return result;
+}
+
+function dateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatFullDate(date) {
+  return new Intl.DateTimeFormat("en-GB", { month: "long", day: "numeric", weekday: "long" }).format(date);
+}
+
+function setText(selector, value) {
+  const element = $(selector);
+  if (element) element.textContent = value;
 }
 
 function renderIcons() {
@@ -194,8 +726,8 @@ function renderIcons() {
 function renderMaterials() {
   const list = $("#materialsList");
   if (!state.materials.length) {
-    list.innerHTML = `<div class="detail-empty compact-empty">暂无素材</div>`;
-    $("#materialDetail").innerHTML = `<div class="detail-empty">导入素材后开始练习</div>`;
+    list.innerHTML = `<div class="detail-empty compact-empty">No materials yet</div>`;
+    $("#materialDetail").innerHTML = `<div class="detail-empty">Import a material to begin</div>`;
     return;
   }
 
@@ -213,13 +745,13 @@ function renderMaterials() {
             <h3>${escapeHtml(material.title)}</h3>
             <span class="pill ${mediaTone}">${mediaLabel}</span>
           </div>
-          <p class="small-note">${material.segments?.length || 0} 句 · ${formatDate(material.createdAt)}</p>
+          <p class="small-note">${material.segments?.length || 0} lines · ${formatDate(material.createdAt)}</p>
           <div class="card-actions">
             <button class="secondary-button" type="button" data-select-material="${material.id}">
               <i data-lucide="play"></i>
-              <span>打开</span>
+              <span>Open</span>
             </button>
-            <button class="ghost-button" type="button" data-delete-material="${material.id}">删除</button>
+            <button class="ghost-button" type="button" data-delete-material="${material.id}">Delete</button>
           </div>
         </article>
       `;
@@ -246,7 +778,7 @@ function renderMaterials() {
       activeMaterialId = state.materials[0]?.id || null;
       saveState();
       renderAll();
-      toast("素材已删除");
+      toast("Material deleted");
     });
   });
 
@@ -259,7 +791,7 @@ async function renderMaterialDetail() {
   if (!material) return;
 
   const sourceLink = material.source
-    ? `<a class="ghost-button" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer">来源</a>`
+    ? `<a class="ghost-button" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer">Source</a>`
     : "";
   const videoBlock = material.videoPath
     ? `
@@ -281,14 +813,14 @@ async function renderMaterialDetail() {
             <article class="sentence-row" data-sentence="${escapeAttribute(segment.text)}">
               <span class="sentence-index">${index + 1}</span>
               <p class="sentence-text">${escapeHtml(segment.text)}</p>
-              <button class="mini-button" type="button" data-play-segment="${index}" aria-label="播放该句">
+              <button class="mini-button" type="button" data-play-segment="${index}" aria-label="Play this line">
                 <i data-lucide="play"></i>
               </button>
             </article>
           `
         )
         .join("")
-    : `<div class="detail-empty compact-empty">字幕正在载入</div>`;
+    : `<div class="detail-empty compact-empty">Transcript is loading</div>`;
 
   const activeChunk = state.chunks.find((chunk) => chunk.id === activeChunkId);
   const practiceChunk = activeChunk || currentAnalysis;
@@ -311,24 +843,24 @@ async function renderMaterialDetail() {
         <div class="step-heading">
           <span class="step-number">1</span>
           <div>
-            <h3>抓取词伙</h3>
-            <p>听到重要表达后，直接说出来。</p>
+            <h3>Capture a Phrase</h3>
+            <p>When you hear a useful expression, say it aloud.</p>
           </div>
         </div>
         <label>
-          <span>英文词伙</span>
+          <span>English phrase</span>
           <div class="voice-field">
-            <input id="capturePhrase" type="text" placeholder="例如：falling more in love" value="${escapeAttribute(currentAnalysis?.phrase || "")}">
-            <button class="icon-button voice-button" type="button" data-voice-target="capturePhrase" data-voice-lang="en-US" aria-label="语音输入英文词伙" title="语音输入英文词伙">
+            <input id="capturePhrase" type="text" placeholder="e.g. falling more in love" value="${escapeAttribute(currentAnalysis?.phrase || "")}">
+            <button class="icon-button voice-button" type="button" data-voice-target="capturePhrase" data-voice-lang="en-US" aria-label="Dictate an English phrase" title="Dictate an English phrase">
               <i data-lucide="mic"></i>
             </button>
           </div>
         </label>
         <label>
-          <span>我的中文理解</span>
+          <span>My understanding</span>
           <div class="voice-field">
-            <textarea id="captureMeaning" rows="3" placeholder="例如：越来越爱上某个人，感情更深了">${escapeHtml(currentAnalysis?.meaning || "")}</textarea>
-            <button class="icon-button voice-button" type="button" data-voice-target="captureMeaning" data-voice-lang="zh-CN" aria-label="语音输入中文理解" title="语音输入中文理解">
+            <textarea id="captureMeaning" rows="3" placeholder="Explain what the phrase means to you">${escapeHtml(currentAnalysis?.meaning || "")}</textarea>
+            <button class="icon-button voice-button" type="button" data-voice-target="captureMeaning" data-voice-lang="zh-CN" aria-label="Dictate your understanding" title="Dictate your understanding">
               <i data-lucide="mic"></i>
             </button>
           </div>
@@ -336,7 +868,7 @@ async function renderMaterialDetail() {
         <input id="captureSourceSentence" type="hidden" value="${escapeAttribute(currentAnalysis?.sentence || "")}">
         <button class="primary-button" type="button" id="analyzeChunkButton">
           <i data-lucide="sparkles"></i>
-          <span>分析这个词伙</span>
+          <span>Analyse This Phrase</span>
         </button>
       </div>
 
@@ -353,7 +885,7 @@ async function renderMaterialDetail() {
       <div class="panel-title">
         <div>
           <p class="section-label">Transcript</p>
-          <h2>逐句文稿</h2>
+          <h2>Line-by-line Transcript</h2>
         </div>
       </div>
       <div class="transcript-panel" id="transcriptPanel">${transcriptRows}</div>
@@ -370,7 +902,7 @@ async function renderMaterialDetail() {
     audio.src = activeAudioUrl;
   } else {
     audio.removeAttribute("src");
-    audio.insertAdjacentHTML("afterend", `<p class="small-note">这个素材暂未保存音频，可以继续用文稿练习。</p>`);
+    audio.insertAdjacentHTML("afterend", `<p class="small-note">No audio is saved for this material. You can still practise with the transcript.</p>`);
   }
 
   bindMaterialDetailEvents(material);
@@ -388,7 +920,7 @@ function bindMaterialDetailEvents(material) {
     const sentence = $("#captureSourceSentence").value.trim();
 
     if (!phrase || !meaning) {
-      toast("请先输入词伙和中文理解");
+      toast("Add the phrase and your understanding first");
       return;
     }
 
@@ -400,7 +932,7 @@ function bindMaterialDetailEvents(material) {
       materialId: material.id,
       sourceMaterialId: material.id,
       sourceTitle: material.title,
-      tag: "听力高频",
+      tag: "Listening",
       analysis: buildChunkAnalysis(phrase, meaning, sentence)
     };
     activeChunkId = "";
@@ -426,7 +958,7 @@ function bindMaterialDetailEvents(material) {
   $$(".sentence-row", $("#transcriptPanel")).forEach((row) => {
     row.addEventListener("click", () => {
       $("#captureSourceSentence").value = row.dataset.sentence || "";
-      toast("已选中来源句");
+      toast("Source line selected");
     });
   });
 
@@ -445,11 +977,11 @@ function renderAnalysisCard(material) {
       <div class="step-heading">
         <span class="step-number">2</span>
         <div>
-          <h3>理解词伙</h3>
-          <p>分析后会看到中文理解是否准确、含义和使用范围。</p>
+          <h3>Understand the Phrase</h3>
+          <p>Review its meaning, range of use and how accurate your interpretation is.</p>
         </div>
       </div>
-      <div class="detail-empty compact-empty">等待分析</div>
+      <div class="detail-empty compact-empty">Waiting for analysis</div>
     `;
   }
 
@@ -464,19 +996,19 @@ function renderAnalysisCard(material) {
     </div>
     <div class="analysis-grid">
       <article>
-        <span>完整含义</span>
+        <span>Full meaning</span>
         <p>${escapeHtml(analysis.definition)}</p>
       </article>
       <article>
-        <span>使用范围</span>
+        <span>Range of use</span>
         <p>${escapeHtml(analysis.range)}</p>
       </article>
       <article>
-        <span>常见搭配</span>
+        <span>Common collocations</span>
         <p>${escapeHtml(analysis.collocations)}</p>
       </article>
       <article>
-        <span>常见误区</span>
+        <span>Common pitfall</span>
         <p>${escapeHtml(analysis.warning)}</p>
       </article>
     </div>
@@ -485,7 +1017,7 @@ function renderAnalysisCard(material) {
     </div>
     <button class="primary-button" type="button" id="saveChunkButton">
       <i data-lucide="bookmark-plus"></i>
-      <span>保存到词伙库</span>
+      <span>Save to Phrase Bank</span>
     </button>
   `;
 }
@@ -496,11 +1028,11 @@ function renderPracticeCard(chunk) {
       <div class="step-heading">
         <span class="step-number">3</span>
         <div>
-          <h3>用它造句</h3>
-          <p>保存词伙后，用语音说一句自己的英文句子。</p>
+          <h3>Use It in a Sentence</h3>
+          <p>Save the phrase, then say an English sentence of your own.</p>
         </div>
       </div>
-      <div class="detail-empty compact-empty">等待词伙</div>
+      <div class="detail-empty compact-empty">Waiting for a phrase</div>
     `;
   }
 
@@ -508,15 +1040,15 @@ function renderPracticeCard(chunk) {
     <div class="step-heading">
       <span class="step-number">3</span>
       <div>
-        <h3>用它造句</h3>
-        <p>目标词伙：${escapeHtml(chunk.phrase)}</p>
+        <h3>Use It in a Sentence</h3>
+        <p>Target phrase: ${escapeHtml(chunk.phrase)}</p>
       </div>
     </div>
     <label>
-      <span>我的英文句子</span>
+      <span>My English sentence</span>
       <div class="voice-field">
-        <textarea id="practiceSentence" rows="4" placeholder="说一句和你自己有关的英文句子"></textarea>
-        <button class="icon-button voice-button" type="button" data-voice-target="practiceSentence" data-voice-lang="en-US" aria-label="语音输入英文句子" title="语音输入英文句子">
+        <textarea id="practiceSentence" rows="4" placeholder="Say an English sentence about your own life"></textarea>
+        <button class="icon-button voice-button" type="button" data-voice-target="practiceSentence" data-voice-lang="en-US" aria-label="Dictate an English sentence" title="Dictate an English sentence">
           <i data-lucide="mic"></i>
         </button>
       </div>
@@ -524,17 +1056,90 @@ function renderPracticeCard(chunk) {
     <div class="button-row">
       <button class="primary-button" type="button" id="checkSentenceButton">
         <i data-lucide="check-circle-2"></i>
-        <span>检查语法和自然度</span>
+        <span>Check Grammar and Naturalness</span>
       </button>
       <button class="secondary-button" type="button" id="saveMistakeButton">
         <i data-lucide="bookmark-plus"></i>
-        <span>加入错题本</span>
+        <span>Add to Error Review</span>
       </button>
     </div>
     <div id="practiceFeedback" class="feedback-area compact-feedback">
       ${latestFeedback ? feedbackMarkup(latestFeedback) : ""}
     </div>
   `;
+}
+
+function renderSentenceStudio() {
+  const container = $("#sentenceStudio");
+  if (!container) return;
+
+  if (!state.chunks.length) {
+    container.innerHTML = `
+      <section class="sentence-empty">
+        <span class="card-icon"><i data-lucide="library"></i></span>
+        <h2>Save a phrase from a material first</h2>
+        <p>Sentence practice uses expressions captured from your materials.</p>
+        <button class="primary-button" type="button" data-nav="materials">
+          <i data-lucide="headphones"></i>
+          <span>Open Materials</span>
+        </button>
+      </section>
+    `;
+    $$("[data-nav]", container).forEach((button) => {
+      button.addEventListener("click", () => switchView(button.dataset.nav));
+    });
+    return;
+  }
+
+  if (!activeChunkId || !state.chunks.some((chunk) => chunk.id === activeChunkId)) {
+    activeChunkId = state.chunks[0].id;
+  }
+
+  const activeChunk = state.chunks.find((chunk) => chunk.id === activeChunkId);
+  container.innerHTML = `
+    <aside class="sentence-picker">
+      <div class="panel-title">
+        <div>
+          <p class="section-label">Choose</p>
+          <h2>Choose a Phrase</h2>
+        </div>
+      </div>
+      <div class="sentence-chip-list">
+        ${state.chunks
+          .map(
+            (chunk) => `
+              <button class="sentence-chip ${chunk.id === activeChunkId ? "is-active" : ""}" type="button" data-pick-sentence-chunk="${chunk.id}">
+                <span>${escapeHtml(chunk.phrase)}</span>
+                <small>${escapeHtml(chunk.meaning || chunk.tag || "Practice expression")}</small>
+              </button>
+            `
+          )
+          .join("")}
+      </div>
+    </aside>
+    <section class="sentence-practice-panel">
+      ${renderPracticeCard(activeChunk)}
+    </section>
+  `;
+
+  $$("[data-pick-sentence-chunk]", container).forEach((button) => {
+    button.addEventListener("click", () => {
+      activeChunkId = button.dataset.pickSentenceChunk;
+      latestFeedback = null;
+      renderSentenceStudio();
+      renderIcons();
+    });
+  });
+
+  $$("[data-voice-target]", container).forEach((button) => {
+    button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
+  });
+
+  const checkButton = $("#checkSentenceButton", container);
+  if (checkButton) checkButton.addEventListener("click", checkPracticeSentence);
+
+  const saveMistakeButton = $("#saveMistakeButton", container);
+  if (saveMistakeButton) saveMistakeButton.addEventListener("click", saveLatestMistake);
 }
 
 function saveCurrentChunk() {
@@ -545,7 +1150,7 @@ function saveCurrentChunk() {
   );
 
   if (exists) {
-    toast("这个词伙已保存");
+    toast("This phrase is already saved");
     return;
   }
 
@@ -566,19 +1171,20 @@ function saveCurrentChunk() {
   activeChunkId = chunk.id;
   saveState();
   renderAll();
-  toast("词伙已保存，可以造句");
+  toast("Phrase saved. It is ready for sentence practice");
 }
 
 function checkPracticeSentence() {
-  const sentence = $("#practiceSentence")?.value.trim();
+  const scope = activeView === "sentences" ? $("#sentenceStudio") : $("#materialDetail");
+  const sentence = $("#practiceSentence", scope || document)?.value.trim();
   const chunk = getActivePracticeChunk();
 
   if (!chunk) {
-    toast("先保存或分析一个词伙");
+    toast("Save or analyse a phrase first");
     return;
   }
   if (!sentence) {
-    toast("先说或输入一句英文");
+    toast("Say or type an English sentence first");
     return;
   }
 
@@ -591,7 +1197,7 @@ function checkPracticeSentence() {
     createdAt: new Date().toISOString()
   });
   saveState();
-  $("#practiceFeedback").innerHTML = feedbackMarkup(latestFeedback);
+  $("#practiceFeedback", scope || document).innerHTML = feedbackMarkup(latestFeedback);
   renderIcons();
 }
 
@@ -602,15 +1208,15 @@ function getActivePracticeChunk() {
 function feedbackMarkup(feedback) {
   return `
     <article class="feedback-card">
-      <h3><i data-lucide="sparkles"></i> 更自然版本</h3>
+      <h3><i data-lucide="sparkles"></i> More Natural Version</h3>
       <div class="corrected-box">${escapeHtml(feedback.corrected)}</div>
     </article>
     <article class="feedback-card">
-      <h3><i data-lucide="scan-search"></i> 检查结果</h3>
+      <h3><i data-lucide="scan-search"></i> Check Results</h3>
       ${feedback.notes.map((note) => `<p class="small-note">${escapeHtml(note)}</p>`).join("")}
     </article>
     <article class="feedback-card">
-      <h3><i data-lucide="target"></i> 训练重点</h3>
+      <h3><i data-lucide="target"></i> Practice Focus</h3>
       <p class="small-note">${escapeHtml(feedback.focus)}</p>
     </article>
   `;
@@ -637,7 +1243,7 @@ function saveLatestMistake() {
   saveState();
   renderStats();
   renderMistakes();
-  toast("已加入错题本");
+  toast("Added to Error Review");
 }
 
 function renderChunks() {
@@ -646,7 +1252,7 @@ function renderChunks() {
   const list = $("#chunksList");
 
   if (!chunks.length) {
-    list.innerHTML = `<div class="detail-empty">暂无词伙</div>`;
+    list.innerHTML = `<div class="detail-empty">No phrases yet</div>`;
     return;
   }
 
@@ -656,17 +1262,17 @@ function renderChunks() {
         <article class="chunk-item">
           <div class="item-topline">
             <p class="chunk-phrase">${escapeHtml(chunk.phrase)}</p>
-            <span class="tag">${escapeHtml(chunk.tag || "未分类")}</span>
+            <span class="tag">${escapeHtml(chunk.tag || "Uncategorised")}</span>
           </div>
-          <p class="muted-text">${escapeHtml(chunk.meaning || "未填写意思")}</p>
+          <p class="muted-text">${escapeHtml(chunk.meaning || "No meaning added")}</p>
           ${chunk.analysis?.definition ? `<p class="chunk-sentence">${escapeHtml(chunk.analysis.definition)}</p>` : ""}
-          ${chunk.sentence ? `<p class="small-note">原句：${escapeHtml(chunk.sentence)}</p>` : ""}
+          ${chunk.sentence ? `<p class="small-note">Source: ${escapeHtml(chunk.sentence)}</p>` : ""}
           <div class="card-actions">
             <button class="secondary-button" type="button" data-practice-chunk="${chunk.id}">
               <i data-lucide="pen-line"></i>
-              <span>回到素材练习</span>
+              <span>Practise with Material</span>
             </button>
-            <button class="ghost-button" type="button" data-delete-chunk="${chunk.id}">删除</button>
+            <button class="ghost-button" type="button" data-delete-chunk="${chunk.id}">Delete</button>
           </div>
         </article>
       `
@@ -691,7 +1297,7 @@ function renderChunks() {
       activeChunkId = state.chunks[0]?.id || "";
       saveState();
       renderAll();
-      toast("词伙已删除");
+      toast("Phrase deleted");
     });
   });
 }
@@ -702,7 +1308,7 @@ function renderMistakes() {
   const list = $("#mistakesList");
 
   if (!mistakes.length) {
-    list.innerHTML = `<div class="detail-empty">暂无错题</div>`;
+    list.innerHTML = `<div class="detail-empty">No saved errors</div>`;
     return;
   }
 
@@ -711,18 +1317,18 @@ function renderMistakes() {
       (mistake) => `
         <article class="mistake-item ${mistake.mastered ? "is-mastered" : ""}">
           <div class="item-topline">
-            <span class="pill ${mistake.category === "语法" ? "" : "amber"}">${escapeHtml(mistake.category)}</span>
+            <span class="pill ${mistake.category === "Grammar" ? "" : "amber"}">${escapeHtml(mistake.category)}</span>
             <span class="small-note">${formatDate(mistake.createdAt)}</span>
           </div>
-          <p class="mistake-original">原句：${escapeHtml(mistake.original)}</p>
-          <p class="mistake-fixed">修正：${escapeHtml(mistake.corrected)}</p>
+          <p class="mistake-original">Original: ${escapeHtml(mistake.original)}</p>
+          <p class="mistake-fixed">Corrected: ${escapeHtml(mistake.corrected)}</p>
           <p class="small-note">${escapeHtml(mistake.note || "")}</p>
           <div class="card-actions">
             <button class="secondary-button" type="button" data-toggle-mastered="${mistake.id}">
               <i data-lucide="${mistake.mastered ? "undo-2" : "check"}"></i>
-              <span>${mistake.mastered ? "恢复" : "已掌握"}</span>
+              <span>${mistake.mastered ? "Restore" : "Mastered"}</span>
             </button>
-            <button class="ghost-button" type="button" data-delete-mistake="${mistake.id}">删除</button>
+            <button class="ghost-button" type="button" data-delete-mistake="${mistake.id}">Delete</button>
           </div>
         </article>
       `
@@ -743,7 +1349,7 @@ function renderMistakes() {
       state.mistakes = state.mistakes.filter((item) => item.id !== button.dataset.deleteMistake);
       saveState();
       renderAll();
-      toast("错题已删除");
+      toast("Error deleted");
     });
   });
 }
@@ -755,7 +1361,7 @@ function startVoiceInput(targetId, lang, button) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     target.focus();
-    toast("当前环境不支持网页语音识别，可用键盘听写");
+    toast("Voice recognition is unavailable here. Try keyboard dictation");
     return;
   }
 
@@ -768,7 +1374,7 @@ function startVoiceInput(targetId, lang, button) {
   activeVoiceButton?.classList.remove("is-listening");
   activeVoiceButton = button;
   button.classList.add("is-listening");
-  toast("正在听...");
+  toast("Listening...");
 
   recognition.onresult = (event) => {
     const text = Array.from(event.results)
@@ -783,7 +1389,7 @@ function startVoiceInput(targetId, lang, button) {
 
   recognition.onerror = () => {
     target.focus();
-    toast("语音识别未成功，可用键盘听写");
+    toast("Voice recognition did not complete. Try keyboard dictation");
   };
 
   recognition.onend = () => {
@@ -811,10 +1417,10 @@ function buildChunkAnalysis(phrase, meaning, sourceSentence = "") {
 
   return {
     verdict,
-    definition: `“${phrase}” 可以先作为一个整体表达记忆，重点观察它在原句里连接了哪些动作、对象和语气。`,
-    range: "当前版本会根据原句给出初步分析；接入 AI 后可以进一步判断语域、隐含语气和更自然的替换表达。",
-    collocations: "把前后的动词、介词和宾语一起记，避免只记单个单词。",
-    warning: "不要直接逐词翻译成中文后再拼回英文，要保留它在原句里的搭配结构。",
+    definition: `Learn “${phrase}” as one complete expression. Notice the actions, objects and tone it connects in the source sentence.`,
+    range: "This version provides an initial reading from the source sentence. A future AI connection can assess register, implied tone and natural alternatives.",
+    collocations: "Remember the surrounding verbs, prepositions and objects together instead of learning isolated words.",
+    warning: "Avoid translating word by word and rebuilding the phrase. Keep its original collocation pattern.",
     examples: [
       sourceSentence,
       `I want to use "${phrase}" in a sentence that feels natural to me.`,
@@ -827,11 +1433,11 @@ function getKnownChunk(phrase) {
   const lower = phrase.toLowerCase();
   if (lower.includes("falling more in love") || lower.includes("fall more in love")) {
     return {
-      keywords: ["爱", "更深", "越来越", "感情"],
-      definition: "表示爱意或情感正在加深，常见于亲密关系或带有浪漫色彩的叙事。",
-      range: "偏口语、叙事和情感表达。通常用于人，也可以有意识地夸张地用于事物或兴趣。",
+      keywords: ["love", "deeper", "increasingly", "feelings"],
+      definition: "Describes affection or emotional attachment becoming stronger, especially in romantic or intimate contexts.",
+      range: "Common in conversation, storytelling and emotional language. It usually refers to people, but can be used playfully for interests or objects.",
       collocations: "feel yourself falling more in love, find yourself falling more in love, keep falling more in love",
-      warning: "不要说 become more love。对象通常接 with someone，而不是 to someone。",
+      warning: "Do not say become more love. The object normally follows with, as in fall in love with someone.",
       examples: [
         "I found myself falling more in love with her every day.",
         "The more we talked, the more I felt myself falling for him."
@@ -840,11 +1446,11 @@ function getKnownChunk(phrase) {
   }
   if (lower.includes("have a hard time")) {
     return {
-      keywords: ["困难", "吃力", "很难"],
-      definition: "表示做某事很吃力、遇到困难，后面通常接 doing。",
-      range: "口语和写作都常见，比 very difficult for me 更自然、更轻松。",
+      keywords: ["difficult", "struggle", "hard"],
+      definition: "Says that an activity is difficult for someone. It is normally followed by an -ing form.",
+      range: "Natural in both speech and writing, and often lighter and more idiomatic than very difficult for me.",
       collocations: "have a hard time doing, have a hard time with something",
-      warning: "不要说 I am difficult to do something。可以说 I have a hard time doing something。",
+      warning: "Do not say I am difficult to do something. Say I have a hard time doing something.",
       examples: [
         "I have a hard time understanding fast native speakers.",
         "She had a hard time adjusting to the new schedule."
@@ -853,11 +1459,11 @@ function getKnownChunk(phrase) {
   }
   if (lower.includes("rabbit hole")) {
     return {
-      keywords: ["陷入", "越聊越深", "停不下来"],
-      definition: "表示进入一个越挖越深、越聊越多、很难停下来的话题或思绪。",
-      range: "口语、网络语境和叙事里常见，可以用于故事、研究、视频、兴趣。",
+      keywords: ["deep", "absorbed", "cannot stop"],
+      definition: "Describes becoming deeply absorbed in a topic, search or train of thought that keeps expanding.",
+      range: "Common in conversation, online contexts and storytelling about research, videos, stories or interests.",
       collocations: "fall into a rabbit hole, go down a rabbit hole, a rabbit hole of stories",
-      warning: "不是字面上的兔子洞，重点是“越陷越深”的感觉。",
+      warning: "It is figurative rather than a literal rabbit hole; the key idea is going increasingly deep into something.",
       examples: [
         "I went down a rabbit hole of old interviews.",
         "We fell into a rabbit hole of childhood stories."
@@ -866,11 +1472,11 @@ function getKnownChunk(phrase) {
   }
   if (lower.includes("turn off the lights")) {
     return {
-      keywords: ["关灯"],
-      definition: "表示关灯，是非常日常、自然的动作表达。",
-      range: "日常口语最常见，也可用于叙事描述。",
+      keywords: ["switch off", "lights"],
+      definition: "A natural everyday expression meaning to switch the lights off.",
+      range: "Most common in daily conversation and also useful in narrative description.",
       collocations: "turn off the lights, turn the lights off, before we turned off the lights",
-      warning: "lights 通常用复数；turn off 是可分短语动词。",
+      warning: "Lights is often plural, and turn off is a separable phrasal verb.",
       examples: [
         "Before we turned off the lights, we talked for a while.",
         "Could you turn the lights off?"
@@ -879,11 +1485,11 @@ function getKnownChunk(phrase) {
   }
   if (lower.includes("find yourself")) {
     return {
-      keywords: ["发现自己", "不知不觉"],
-      definition: "表示不知不觉处在某种状态或开始做某事。",
-      range: "叙事和表达心理变化时很自然，后面常接 doing 或介词短语。",
+      keywords: ["realise", "unexpectedly", "notice yourself"],
+      definition: "Means that you unexpectedly notice yourself in a state or doing an activity.",
+      range: "Natural in storytelling and descriptions of mental change. It is often followed by an -ing form or prepositional phrase.",
       collocations: "find yourself doing, find yourself in, suddenly find yourself",
-      warning: "这里的 find 不是寻找，而是“发现自己处于某状态”。",
+      warning: "Find does not mean search here; it means to notice yourself in a particular state.",
       examples: [
         "I found myself thinking about that sentence all day.",
         "You may find yourself using the phrase naturally."
@@ -892,11 +1498,11 @@ function getKnownChunk(phrase) {
   }
   if (lower.includes("it turns out")) {
     return {
-      keywords: ["结果", "原来", "事实证明"],
-      definition: "用来引出后来发现的事实、结果或转折。",
-      range: "口语和写作都常见，适合讲故事、解释原因、纠正预期。",
+      keywords: ["result", "actually", "discover"],
+      definition: "Introduces a fact, result or contrast that became clear later.",
+      range: "Common in speech and writing for storytelling, explaining causes and correcting expectations.",
       collocations: "it turns out that, as it turns out, turned out to be",
-      warning: "不要和 turn out the light 混淆；这里 turn out 表示结果是。",
+      warning: "Do not confuse it with turn out the light. Here, turn out refers to the eventual result.",
       examples: [
         "It turns out that I was focusing on the wrong problem.",
         "The meeting turned out to be useful."
@@ -907,64 +1513,64 @@ function getKnownChunk(phrase) {
 }
 
 function reviewMeaning(meaning, known) {
-  if (!meaning.trim()) return "请先写下或说出你的中文理解。";
-  if (!known) return "你的中文理解已记录；当前版本会先给出基于原句的初步判断。";
+  if (!meaning.trim()) return "Write or dictate your understanding first.";
+  if (!known) return "Your interpretation is saved. This version gives an initial assessment based on the source sentence.";
   const hit = known.keywords.some((keyword) => meaning.includes(keyword));
-  return hit ? "你的中文理解基本准确。" : "你的中文理解可能还不完整，可以再对照完整含义调整。";
+  return hit ? "Your interpretation is broadly accurate." : "Your interpretation may be incomplete. Compare it with the full meaning and refine it.";
 }
 
 function analyseSentence(sentence, chunk) {
   const notes = [];
   let corrected = sentence.trim();
-  let focus = "保留目标词伙，下一次换一个更贴近你生活的场景再说一遍。";
+  let focus = "Keep the target phrase and repeat it in a new situation from your own life.";
 
   if (!/[.!?]$/.test(corrected)) {
     corrected += ".";
-    notes.push("句末建议加标点，让完整句更稳定。");
+    notes.push("Add sentence-ending punctuation to make the sentence complete.");
   }
 
   if (/\bi\b/.test(corrected)) {
     corrected = corrected.replace(/\bi\b/g, "I");
-    notes.push("英文里的第一人称 I 需要大写。");
+    notes.push("The first-person pronoun I must be capitalised.");
   }
 
   if (/I am difficult to/i.test(corrected)) {
     corrected = corrected.replace(/I am difficult to/i, "I find it difficult to");
-    notes.push("表达“我觉得难”时，不说 I am difficult to...，可以说 I find it difficult to...");
-    focus = "练习 I find it difficult to... / I have difficulty doing...";
+    notes.push("To describe something you find hard, use I find it difficult to..., not I am difficult to...");
+    focus = "Practise I find it difficult to... and I have difficulty doing...";
   }
 
   if (/listen music/i.test(corrected)) {
     corrected = corrected.replace(/listen music/gi, "listen to music");
-    notes.push("listen 后面接宾语时通常需要 to。");
-    focus = "留意动词后面的固定介词。";
+    notes.push("Listen normally needs to before its object.");
+    focus = "Notice the fixed prepositions that follow verbs.";
   }
 
   if (/different with/i.test(corrected)) {
     corrected = corrected.replace(/different with/gi, "different from");
-    notes.push("different from 比 different with 更自然。");
-    focus = "把形容词和介词当作一个整体记忆。";
+    notes.push("Different from is more natural than different with.");
+    focus = "Learn adjectives and their prepositions as one unit.";
   }
 
   if (/discuss about/i.test(corrected)) {
     corrected = corrected.replace(/discuss about/gi, "discuss");
-    notes.push("discuss 是及物动词，后面直接接讨论对象。");
-    focus = "注意中文里有“关于”，英文里不一定需要 about。";
+    notes.push("Discuss is transitive, so it takes its object directly.");
+    focus = "Do not add about after discuss.";
   }
 
   const usedChunk = chunkLooksUsed(corrected, chunk.phrase);
   if (!usedChunk) {
-    notes.push(`这句话里没有明显用到目标词伙：${chunk.phrase}`);
-    focus = "先把目标词伙放进句子，再调整语法和语气。";
+    notes.push(`The target phrase is not clearly used in this sentence: ${chunk.phrase}`);
+    focus = "Place the target phrase in the sentence before refining its grammar and tone.";
   }
 
   if (chunk.analysis?.range && /english|work|study|project/i.test(corrected) && /love/i.test(chunk.phrase)) {
-    notes.push("这个词伙带浪漫或强情感色彩，用在人以外的对象时会显得夸张，可以有意识地作为幽默或强调。");
-    focus = "注意词伙的使用范围，不只看字面意思。";
+    notes.push("This phrase carries romantic or strong emotional colour. Using it for non-human objects sounds exaggerated, which can work as humour or emphasis.");
+    focus = "Notice a phrase’s range of use, not only its literal meaning.";
   }
 
   if (notes.length === 0) {
-    notes.push("基础检查没有发现明显问题。下一步接 AI 后可以继续检查语气、自然度和更地道说法。");
+    notes.push("The basic check found no obvious issues. A future AI connection can assess tone, naturalness and more idiomatic alternatives.");
   }
 
   return {
@@ -972,7 +1578,7 @@ function analyseSentence(sentence, chunk) {
     corrected,
     notes,
     focus,
-    category: usedChunk ? "语法" : "搭配"
+    category: usedChunk ? "Grammar" : "Collocation"
   };
 }
 
@@ -1030,7 +1636,7 @@ function parseTimestamp(value) {
 
 function playSegment(audio, segment) {
   if (!audio?.src) {
-    toast("这个素材还没有音频");
+    toast("This material has no audio");
     return;
   }
   if (!segment || segment.start == null || segment.end == null) {
@@ -1102,7 +1708,7 @@ function exportData() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  toast("数据已导出");
+  toast("Data exported");
 }
 
 function createId(prefix) {
@@ -1119,7 +1725,7 @@ function toast(message) {
 
 function formatDate(value) {
   if (!value) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-GB", {
     month: "short",
     day: "numeric"
   }).format(new Date(value));
