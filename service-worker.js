@@ -1,4 +1,4 @@
-const CACHE_NAME = "englishflow-shell-v5";
+const CACHE_NAME = "flowe-shell-v1";
 const APP_SHELL = [
   "./",
   "./index.html",

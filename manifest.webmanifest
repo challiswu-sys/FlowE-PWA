@@ -1,6 +1,6 @@
 {
-  "name": "EnglishFlow",
-  "short_name": "EnglishFlow",
+  "name": "FlowE",
+  "short_name": "FlowE",
   "description": "A personal English practice PWA for listening materials, chunks, sentence practice, and error review.",
   "start_url": "./index.html",
   "scope": "./",
