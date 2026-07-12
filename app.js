@@ -10,11 +10,19 @@ let activeMaterialId = state.materials[0]?.id || null;
 let activeChunkId = state.chunks[0]?.id || null;
 let currentAnalysis = null;
 let latestFeedback = null;
+let activeCaptureId = null;
+let captureEditorOpen = false;
+let activePhraseDetailId = null;
+let activeErrorId = null;
+let editingMaterialId = null;
 let activeAudioUrl = null;
 let activeVideoUrl = null;
 let activePosterUrl = null;
 let frequentCoverUrls = [];
 let frequentPreviewRenderId = 0;
+let materialListCoverUrls = [];
+let materialListRenderId = 0;
+let materialDetailRenderId = 0;
 let segmentTimer = null;
 let recognition = null;
 let activeVoiceButton = null;
@@ -115,13 +123,54 @@ function loadState() {
 }
 
 function normalizeState(nextState) {
-  const materials = (nextState.materials || []).filter((item) => !BLOCKED_PUBLIC_MATERIAL_IDS.has(item.id));
   const blockedSourceIds = new Set([...BLOCKED_PUBLIC_MATERIAL_IDS]);
+  const chunks = (nextState.chunks || [])
+    .filter((chunk) => !blockedSourceIds.has(chunk.sourceMaterialId))
+    .map((chunk) => ({ ...chunk, tag: translateLegacyLabel(chunk.tag) }));
+  const materials = (nextState.materials || [])
+    .filter((item) => !BLOCKED_PUBLIC_MATERIAL_IDS.has(item.id))
+    .map((material) => {
+      const captures = Array.isArray(material.captures) ? [...material.captures] : [];
+      chunks
+        .filter((chunk) => chunk.sourceMaterialId === material.id)
+        .forEach((chunk) => {
+          const alreadyLinked = captures.some((capture) =>
+            capture.linkedChunkId === chunk.id || capture.phrase?.toLowerCase() === chunk.phrase?.toLowerCase()
+          );
+          if (!alreadyLinked) {
+            captures.push({
+              id: `cap_${chunk.id}`,
+              phrase: chunk.phrase,
+              meaning: chunk.meaning || "",
+              sentence: chunk.sentence || "",
+              analysis: chunk.analysis || buildChunkAnalysis(chunk.phrase, chunk.meaning || "", chunk.sentence || ""),
+              linkedChunkId: chunk.id,
+              createdAt: chunk.createdAt || new Date().toISOString()
+            });
+          }
+        });
+      return { ...material, captures };
+    });
+  const mistakes = (nextState.mistakes || [])
+    .filter((mistake) => !blockedSourceIds.has(mistake.sourceMaterialId))
+    .map((mistake) => {
+      const sourceChunk = chunks.find((chunk) => chunk.id === mistake.sourceChunkId);
+      return {
+        ...mistake,
+        category: translateLegacyLabel(mistake.category),
+        phrase: mistake.phrase || sourceChunk?.phrase || "Saved sentence error",
+        meaning: mistake.meaning || sourceChunk?.meaning || "",
+        sentence: mistake.sentence || sourceChunk?.sentence || "",
+        analysis: mistake.analysis || sourceChunk?.analysis || null,
+        practiceHistory: mistake.practiceHistory || sourceChunk?.practiceHistory || [],
+        morePractice: mistake.morePractice || []
+      };
+    });
 
   return {
     materials,
-    chunks: (nextState.chunks || []).filter((chunk) => !blockedSourceIds.has(chunk.sourceMaterialId)).map((chunk) => ({ ...chunk, tag: translateLegacyLabel(chunk.tag) })),
-    mistakes: (nextState.mistakes || []).filter((mistake) => !blockedSourceIds.has(mistake.sourceMaterialId)).map((mistake) => ({ ...mistake, category: translateLegacyLabel(mistake.category) })),
+    chunks,
+    mistakes,
     attempts: nextState.attempts || [],
     practiceLog: nextState.practiceLog || {},
     profile: {
@@ -190,6 +239,7 @@ function bindForms() {
     const videoFile = $("#videoInput").files?.[0] || null;
     const audioFile = $("#audioInput").files?.[0] || null;
     const coverFile = $("#coverInput").files?.[0] || null;
+    const transcriptFile = $("#transcriptInput").files?.[0] || null;
     const transcript = $("#transcriptText").value.trim();
 
     if (!title || !transcript) {
@@ -197,21 +247,25 @@ function bindForms() {
       return;
     }
 
-    const id = createId("mat");
-    const material = {
-      id,
+    const existing = editingMaterialId
+      ? state.materials.find((material) => material.id === editingMaterialId)
+      : null;
+    const id = existing?.id || createId("mat");
+    const material = existing || { id, captures: [], createdAt: new Date().toISOString() };
+    Object.assign(material, {
       title,
       source,
-      videoName: videoFile?.name || "",
-      videoType: videoFile?.type || "",
-      audioName: audioFile?.name || "",
-      audioType: audioFile?.type || "",
-      coverName: coverFile?.name || "",
-      coverType: coverFile?.type || "",
-      createdAt: new Date().toISOString(),
+      videoName: videoFile?.name || material.videoName || "",
+      videoType: videoFile?.type || material.videoType || "",
+      audioName: audioFile?.name || material.audioName || "",
+      audioType: audioFile?.type || material.audioType || "",
+      coverName: coverFile?.name || material.coverName || "",
+      coverType: coverFile?.type || material.coverType || "",
+      transcriptName: transcriptFile?.name || material.transcriptName || "",
       transcript,
-      segments: segmentTranscript(transcript)
-    };
+      segments: segmentTranscript(transcript),
+      updatedAt: new Date().toISOString()
+    });
 
     await Promise.all([
       videoFile ? putFile("video", id, videoFile) : Promise.resolve(),
@@ -219,15 +273,53 @@ function bindForms() {
       coverFile ? putFile("cover", id, coverFile) : Promise.resolve()
     ]);
 
-    state.materials.unshift(material);
+    if (!existing) state.materials.unshift(material);
     activeMaterialId = id;
+    activeCaptureId = null;
+    captureEditorOpen = false;
     currentAnalysis = null;
     latestFeedback = null;
     saveState();
-    event.target.reset();
+    closeMaterialEditor();
     renderAll();
-    toast("Material saved");
+    toast(existing ? "Material updated" : "Material saved");
   });
+}
+
+function openMaterialEditor(material = null) {
+  const editor = $("#materialImporter");
+  const form = $("#materialForm");
+  if (!editor || !form) return;
+
+  editingMaterialId = material?.id || null;
+  form.reset();
+  $("#materialTitle").value = material?.title || "";
+  $("#materialSource").value = material?.source || "";
+  $("#transcriptText").value = material?.transcript || "";
+  setText("#materialFormMode", material ? "Edit material" : "New material");
+  setText("#materialFormTitle", material ? "Edit Material" : "Add Material");
+  setText("#materialSubmitLabel", material ? "Save Changes" : "Save Material");
+  setCurrentFile("#currentVideoFile", material?.videoName);
+  setCurrentFile("#currentAudioFile", material?.audioName);
+  setCurrentFile("#currentCoverFile", material?.coverName);
+  setCurrentFile("#currentTranscriptFile", material?.transcriptName);
+  editor.hidden = false;
+  editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  window.setTimeout(() => $("#materialTitle")?.focus(), 180);
+  renderIcons();
+}
+
+function closeMaterialEditor() {
+  const editor = $("#materialImporter");
+  const form = $("#materialForm");
+  editingMaterialId = null;
+  if (editor) editor.hidden = true;
+  form?.reset();
+  ["#currentVideoFile", "#currentAudioFile", "#currentCoverFile", "#currentTranscriptFile"].forEach((selector) => setText(selector, ""));
+}
+
+function setCurrentFile(selector, filename) {
+  setText(selector, filename ? `Current: ${filename}. Choose a new file only to replace it.` : "");
 }
 
 function bindActions() {
@@ -241,15 +333,16 @@ function bindActions() {
     toast("Mastered items archived");
   });
 
-  $("#exportButton").addEventListener("click", exportData);
+  $("#exportButton")?.addEventListener("click", exportData);
 
   $("#addMaterialButton")?.addEventListener("click", () => {
     window.requestAnimationFrame(() => {
-      const importer = $("#materialImporter");
-      if (importer) importer.open = true;
-      $("#materialTitle")?.focus();
+      openMaterialEditor();
     });
   });
+
+  $("#manageAddMaterialButton")?.addEventListener("click", () => openMaterialEditor());
+  $("#cancelMaterialEditButton")?.addEventListener("click", closeMaterialEditor);
 
   $("#practiceSummaryToggle")?.addEventListener("click", () => {
     practiceSummaryOpen = !practiceSummaryOpen;
@@ -257,7 +350,7 @@ function bindActions() {
     renderIcons();
   });
 
-  $("#backupInput").addEventListener("change", async (event) => {
+  $("#backupInput")?.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
@@ -768,38 +861,58 @@ function renderMaterials() {
   list.innerHTML = state.materials
     .map((material) => {
       const mediaLabel = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
-      const mediaTone = material.videoPath || material.videoName || material.audioName ? "green" : "amber";
+      const cover = material.posterPath
+        ? `<img src="${escapeAttribute(material.posterPath)}" alt="">`
+        : material.coverName
+          ? `<img data-material-list-cover="${escapeAttribute(material.id)}" alt="">`
+          : `<span>${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
       return `
         <article class="material-item ${material.id === activeMaterialId ? "is-active" : ""}">
-          <div class="item-topline">
-            <h3>${escapeHtml(material.title)}</h3>
-            <span class="pill ${mediaTone}">${mediaLabel}</span>
+          <div class="material-item-main">
+            <span class="material-list-cover">${cover}</span>
+            <div class="material-item-copy">
+              <h3>${escapeHtml(material.title)}</h3>
+              <p>${mediaLabel} · ${material.captures?.length || 0} phrases · ${material.segments?.length || 0} lines</p>
+            </div>
           </div>
-          <p class="small-note">${material.segments?.length || 0} lines · ${formatDate(material.createdAt)}</p>
-          <div class="card-actions">
+          <div class="material-row-actions">
             <button class="secondary-button" type="button" data-select-material="${material.id}">
               <i data-lucide="play"></i>
               <span>Open</span>
             </button>
-            <button class="ghost-button" type="button" data-delete-material="${material.id}">Delete</button>
+            <button class="icon-button" type="button" data-edit-material="${material.id}" aria-label="Edit ${escapeAttribute(material.title)}" title="Edit material"><i data-lucide="pencil"></i></button>
+            <button class="icon-button danger-icon" type="button" data-delete-material="${material.id}" aria-label="Delete ${escapeAttribute(material.title)}" title="Delete material"><i data-lucide="trash-2"></i></button>
           </div>
         </article>
       `;
     })
     .join("");
 
+  loadMaterialListCovers(list, state.materials);
+
   $$("[data-select-material]", list).forEach((button) => {
     button.addEventListener("click", () => {
       activeMaterialId = button.dataset.selectMaterial;
+      activeCaptureId = null;
+      captureEditorOpen = false;
       currentAnalysis = null;
       latestFeedback = null;
       renderAll();
     });
   });
 
+  $$("[data-edit-material]", list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const material = state.materials.find((item) => item.id === button.dataset.editMaterial);
+      if (material) openMaterialEditor(material);
+    });
+  });
+
   $$("[data-delete-material]", list).forEach((button) => {
     button.addEventListener("click", async () => {
       const id = button.dataset.deleteMaterial;
+      const material = state.materials.find((item) => item.id === id);
+      if (!window.confirm(`Delete “${material?.title || "this material"}” and its locally stored media?`)) return;
       state.materials = state.materials.filter((item) => item.id !== id);
       state.chunks = state.chunks.map((chunk) =>
         chunk.sourceMaterialId === id ? { ...chunk, sourceMaterialId: "", sourceTitle: "Deleted material" } : chunk
@@ -810,6 +923,7 @@ function renderMaterials() {
         deleteFile("cover", id)
       ]);
       activeMaterialId = state.materials[0]?.id || null;
+      activeCaptureId = null;
       saveState();
       renderAll();
       toast("Material deleted");
@@ -819,10 +933,42 @@ function renderMaterials() {
   renderMaterialDetail();
 }
 
+async function loadMaterialListCovers(container, materials) {
+  const renderId = ++materialListRenderId;
+  materialListCoverUrls.forEach((url) => URL.revokeObjectURL(url));
+  materialListCoverUrls = [];
+
+  await Promise.all(materials.map(async (material) => {
+    if (!material.coverName || material.posterPath) return;
+    const blob = await getFile("cover", material.id);
+    if (!blob || renderId !== materialListRenderId) return;
+    const image = container.querySelector(`[data-material-list-cover="${CSS.escape(material.id)}"]`);
+    if (!image) return;
+    const url = URL.createObjectURL(blob);
+    materialListCoverUrls.push(url);
+    image.src = url;
+  }));
+}
+
 async function renderMaterialDetail() {
+  const renderId = ++materialDetailRenderId;
   const container = $("#materialDetail");
   const material = state.materials.find((item) => item.id === activeMaterialId);
   if (!material) return;
+  material.captures = Array.isArray(material.captures) ? material.captures : [];
+
+  if (activeCaptureId && !material.captures.some((capture) => capture.id === activeCaptureId)) {
+    activeCaptureId = null;
+  }
+  const activeCapture = material.captures.find((capture) => capture.id === activeCaptureId) || null;
+  if (activeCapture) {
+    currentAnalysis = captureAsAnalysis(activeCapture, material);
+    activeChunkId = activeCapture.linkedChunkId || "";
+    latestFeedback = activeCapture.latestFeedback || null;
+  } else {
+    currentAnalysis = null;
+    latestFeedback = null;
+  }
 
   const sourceLink = material.source
     ? `<a class="ghost-button" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer">Source</a>`
@@ -859,9 +1005,6 @@ async function renderMaterialDetail() {
         .join("")
     : `<div class="detail-empty compact-empty">Transcript is loading</div>`;
 
-  const activeChunk = state.chunks.find((chunk) => chunk.id === activeChunkId);
-  const practiceChunk = activeChunk || currentAnalysis;
-
   container.className = "detail-content";
   container.innerHTML = `
     <div class="workbench-head">
@@ -875,58 +1018,32 @@ async function renderMaterialDetail() {
     ${videoBlock}
     ${audioBlock}
 
-    <div class="guided-flow">
-      <div class="step-card">
-        <div class="step-heading">
-          <span class="step-number">1</span>
-          <div>
-            <h3>Capture a Phrase</h3>
-            <p>When you hear a useful expression, say it aloud.</p>
-          </div>
-        </div>
-        <label>
-          <span>English phrase</span>
-          <div class="voice-field">
-            <input id="capturePhrase" type="text" placeholder="e.g. falling more in love" value="${escapeAttribute(currentAnalysis?.phrase || "")}">
-            <button class="icon-button voice-button" type="button" data-voice-target="capturePhrase" data-voice-lang="en-US" aria-label="Dictate an English phrase" title="Dictate an English phrase">
-              <i data-lucide="mic"></i>
-            </button>
-          </div>
-        </label>
-        <label>
-          <span>My understanding</span>
-          <div class="voice-field">
-            <textarea id="captureMeaning" rows="3" placeholder="Explain what the phrase means to you">${escapeHtml(currentAnalysis?.meaning || "")}</textarea>
-            <button class="icon-button voice-button" type="button" data-voice-target="captureMeaning" data-voice-lang="zh-CN" aria-label="Dictate your understanding" title="Dictate your understanding">
-              <i data-lucide="mic"></i>
-            </button>
-          </div>
-        </label>
-        <input id="captureSourceSentence" type="hidden" value="${escapeAttribute(currentAnalysis?.sentence || "")}">
-        <button class="primary-button" type="button" id="analyzeChunkButton">
-          <i data-lucide="sparkles"></i>
-          <span>Analyse This Phrase</span>
-        </button>
-      </div>
-
-      <div class="step-card" id="analysisCard">
-        ${renderAnalysisCard(material)}
-      </div>
-
-      <div class="step-card practice-card">
-        ${renderPracticeCard(practiceChunk)}
-      </div>
-    </div>
-
-    <div class="transcript-block">
-      <div class="panel-title">
+    <section class="material-phrases" aria-labelledby="capturedPhrasesTitle">
+      <div class="phrase-section-head">
         <div>
-          <p class="section-label">Transcript</p>
-          <h2>Line-by-line Transcript</h2>
+          <p class="section-label">From this material</p>
+          <h2 id="capturedPhrasesTitle">Captured Phrases <span>${material.captures.length}</span></h2>
         </div>
+        ${captureEditorOpen || !material.captures.length ? "" : `
+          <button class="primary-button compact-action" type="button" id="addPhraseButton">
+            <i data-lucide="plus"></i>
+            <span>Add Phrase</span>
+          </button>
+        `}
       </div>
+
+      ${captureEditorOpen || !material.captures.length ? renderCaptureEditor(Boolean(material.captures.length)) : ""}
+      ${renderCapturedPhraseList(material, activeCapture)}
+    </section>
+
+    <details class="transcript-drawer transcript-block">
+      <summary>
+        <span><i data-lucide="captions"></i> Transcript</span>
+        <small>${material.segments?.length || 0} lines</small>
+        <i data-lucide="chevron-down"></i>
+      </summary>
       <div class="transcript-panel" id="transcriptPanel">${transcriptRows}</div>
-    </div>
+    </details>
   `;
 
   const video = $("#activeVideo");
@@ -936,6 +1053,7 @@ async function renderMaterialDetail() {
     material.audioPath ? null : getFile("audio", material.id),
     material.posterPath ? null : getFile("cover", material.id)
   ]);
+  if (renderId !== materialDetailRenderId || activeMaterialId !== material.id) return;
   if (activeVideoUrl) URL.revokeObjectURL(activeVideoUrl);
   if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
   if (activePosterUrl) URL.revokeObjectURL(activePosterUrl);
@@ -973,7 +1091,27 @@ function bindMaterialDetailEvents(material) {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
 
-  $("#analyzeChunkButton").addEventListener("click", () => {
+  $("#addPhraseButton")?.addEventListener("click", () => {
+    captureEditorOpen = true;
+    activeCaptureId = null;
+    renderMaterialDetail();
+  });
+
+  $("#cancelCaptureButton")?.addEventListener("click", () => {
+    captureEditorOpen = false;
+    renderMaterialDetail();
+  });
+
+  $$('[data-open-capture]', $("#materialDetail")).forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextId = button.dataset.openCapture;
+      activeCaptureId = activeCaptureId === nextId ? null : nextId;
+      captureEditorOpen = false;
+      renderMaterialDetail();
+    });
+  });
+
+  $("#analyzeChunkButton")?.addEventListener("click", () => {
     const phrase = $("#capturePhrase").value.trim();
     const meaning = $("#captureMeaning").value.trim();
     const sentence = $("#captureSourceSentence").value.trim();
@@ -983,20 +1121,24 @@ function bindMaterialDetailEvents(material) {
       return;
     }
 
-    currentAnalysis = {
-      id: createId("draft"),
+    const capture = {
+      id: createId("cap"),
       phrase,
       meaning,
       sentence,
-      materialId: material.id,
-      sourceMaterialId: material.id,
-      sourceTitle: material.title,
-      tag: "Listening",
-      analysis: buildChunkAnalysis(phrase, meaning, sentence)
+      analysis: buildChunkAnalysis(phrase, meaning, sentence),
+      linkedChunkId: "",
+      createdAt: new Date().toISOString()
     };
+    material.captures.unshift(capture);
+    activeCaptureId = capture.id;
+    captureEditorOpen = false;
+    currentAnalysis = captureAsAnalysis(capture, material);
     activeChunkId = "";
     latestFeedback = null;
+    saveState();
     renderMaterialDetail();
+    toast("Phrase added to this material");
   });
 
   const saveButton = $("#saveChunkButton");
@@ -1004,20 +1146,35 @@ function bindMaterialDetailEvents(material) {
     saveButton.addEventListener("click", saveCurrentChunk);
   }
 
-  const checkButton = $("#checkSentenceButton");
+  const checkButton = $("[data-check-sentence]", $("#materialDetail"));
   if (checkButton) {
-    checkButton.addEventListener("click", checkPracticeSentence);
+    checkButton.addEventListener("click", () => checkPracticeSentence($("#materialDetail")));
   }
 
-  const saveMistakeButton = $("#saveMistakeButton");
+  const saveMistakeButton = $("[data-save-mistake]", $("#materialDetail"));
   if (saveMistakeButton) {
-    saveMistakeButton.addEventListener("click", saveLatestMistake);
+    saveMistakeButton.addEventListener("click", () => saveLatestMistake($("#materialDetail")));
   }
+
+  $("#deleteCaptureButton")?.addEventListener("click", () => {
+    material.captures = material.captures.filter((capture) => capture.id !== activeCaptureId);
+    activeCaptureId = null;
+    currentAnalysis = null;
+    latestFeedback = null;
+    saveState();
+    renderMaterialDetail();
+    toast("Phrase removed from this material");
+  });
 
   $$(".sentence-row", $("#transcriptPanel")).forEach((row) => {
     row.addEventListener("click", () => {
-      $("#captureSourceSentence").value = row.dataset.sentence || "";
-      toast("Source line selected");
+      const sourceInput = $("#captureSourceSentence");
+      if (sourceInput) {
+        sourceInput.value = row.dataset.sentence || "";
+        toast("Source line selected");
+      } else {
+        toast("Open Add Phrase before selecting a source line");
+      }
     });
   });
 
@@ -1028,6 +1185,96 @@ function bindMaterialDetailEvents(material) {
       playSegment($("#activeAudio") || $("#activeVideo"), segment);
     });
   });
+}
+
+function renderCaptureEditor(canCancel) {
+  return `
+    <section class="capture-editor">
+      <div class="capture-editor-head">
+        <h3>Capture a Phrase</h3>
+        ${canCancel ? `<button class="icon-button" type="button" id="cancelCaptureButton" aria-label="Close phrase form" title="Close phrase form"><i data-lucide="x"></i></button>` : ""}
+      </div>
+      <label>
+        <span>English phrase</span>
+        <div class="voice-field">
+          <input id="capturePhrase" type="text" placeholder="e.g. a specific inspiring story">
+          <button class="icon-button voice-button" type="button" data-voice-target="capturePhrase" data-voice-lang="en-US" aria-label="Dictate an English phrase" title="Dictate an English phrase"><i data-lucide="mic"></i></button>
+        </div>
+      </label>
+      <label>
+        <span>My understanding in Chinese</span>
+        <div class="voice-field">
+          <textarea id="captureMeaning" rows="3" placeholder="用中文说出你的理解"></textarea>
+          <button class="icon-button voice-button" type="button" data-voice-target="captureMeaning" data-voice-lang="zh-CN" aria-label="Dictate your understanding" title="Dictate your understanding"><i data-lucide="mic"></i></button>
+        </div>
+      </label>
+      <input id="captureSourceSentence" type="hidden" value="">
+      <button class="primary-button" type="button" id="analyzeChunkButton">
+        <i data-lucide="sparkles"></i>
+        <span>Analyse This Phrase</span>
+      </button>
+    </section>
+  `;
+}
+
+function renderCapturedPhraseList(material, activeCapture) {
+  if (!material.captures.length) return "";
+  return `
+    <div class="captured-phrase-list">
+      ${material.captures.map((capture, index) => {
+        const isOpen = activeCapture?.id === capture.id;
+        return `
+          <article class="captured-phrase ${isOpen ? "is-open" : ""}">
+            <button class="captured-phrase-row" type="button" data-open-capture="${escapeAttribute(capture.id)}" aria-expanded="${isOpen}">
+              <span class="phrase-order">${String(index + 1).padStart(2, "0")}</span>
+              <strong>${escapeHtml(capture.phrase)}</strong>
+              ${capture.linkedChunkId ? `<span class="phrase-saved-state">In Phrase Bank</span>` : ""}
+              <i data-lucide="chevron-down"></i>
+            </button>
+            ${isOpen ? `<div class="captured-phrase-detail">${renderCaptureWorkspace(capture)}</div>` : ""}
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderCaptureWorkspace(capture) {
+  const analysis = capture.analysis || buildChunkAnalysis(capture.phrase, capture.meaning, capture.sentence || "");
+  return `
+    <div class="capture-understanding">
+      <span>My understanding</span>
+      <p>${escapeHtml(capture.meaning)}</p>
+    </div>
+    <div class="analysis-grid capture-analysis-grid">
+      <article><span>Full meaning</span><p>${escapeHtml(analysis.definition)}</p></article>
+      <article><span>Range of use</span><p>${escapeHtml(analysis.range)}</p></article>
+      <article><span>Common collocations</span><p>${escapeHtml(analysis.collocations)}</p></article>
+      <article><span>Common pitfall</span><p>${escapeHtml(analysis.warning)}</p></article>
+    </div>
+    <div class="example-stack">
+      ${analysis.examples.map((example) => `<p>${escapeHtml(example)}</p>`).join("")}
+    </div>
+    <div class="phrase-bank-action">
+      ${capture.linkedChunkId
+        ? `<span class="saved-confirmation"><i data-lucide="check"></i> Saved to Phrase Bank</span>`
+        : `<button class="secondary-button" type="button" id="saveChunkButton"><i data-lucide="bookmark-plus"></i><span>Save to Phrase Bank</span></button>`}
+    </div>
+    <section class="inline-sentence-practice practice-card">
+      ${renderPracticeCard(capture, false)}
+    </section>
+    <button class="ghost-button remove-capture-button" type="button" id="deleteCaptureButton"><i data-lucide="trash-2"></i><span>Remove from this material</span></button>
+  `;
+}
+
+function captureAsAnalysis(capture, material) {
+  return {
+    ...capture,
+    materialId: material.id,
+    sourceMaterialId: material.id,
+    sourceTitle: material.title,
+    tag: "Listening"
+  };
 }
 
 function renderAnalysisCard(material) {
@@ -1081,13 +1328,13 @@ function renderAnalysisCard(material) {
   `;
 }
 
-function renderPracticeCard(chunk) {
+function renderPracticeCard(chunk, showErrorAction = true, heading = "Use It in a Sentence") {
   if (!chunk) {
     return `
       <div class="step-heading">
         <span class="step-number">3</span>
         <div>
-          <h3>Use It in a Sentence</h3>
+          <h3>${escapeHtml(heading)}</h3>
           <p>Save the phrase, then say an English sentence of your own.</p>
         </div>
       </div>
@@ -1099,30 +1346,32 @@ function renderPracticeCard(chunk) {
     <div class="step-heading">
       <span class="step-number">3</span>
       <div>
-        <h3>Use It in a Sentence</h3>
+        <h3>${escapeHtml(heading)}</h3>
         <p>Target phrase: ${escapeHtml(chunk.phrase)}</p>
       </div>
     </div>
     <label>
       <span>My English sentence</span>
       <div class="voice-field">
-        <textarea id="practiceSentence" rows="4" placeholder="Say an English sentence about your own life"></textarea>
+        <textarea data-practice-sentence rows="4" placeholder="Say an English sentence about your own life"></textarea>
         <button class="icon-button voice-button" type="button" data-voice-target="practiceSentence" data-voice-lang="en-US" aria-label="Dictate an English sentence" title="Dictate an English sentence">
           <i data-lucide="mic"></i>
         </button>
       </div>
     </label>
     <div class="button-row">
-      <button class="primary-button" type="button" id="checkSentenceButton">
+      <button class="primary-button" type="button" data-check-sentence>
         <i data-lucide="check-circle-2"></i>
         <span>Check Grammar and Naturalness</span>
       </button>
-      <button class="secondary-button" type="button" id="saveMistakeButton">
-        <i data-lucide="bookmark-plus"></i>
-        <span>Add to Error Review</span>
-      </button>
+      ${showErrorAction ? `
+        <button class="secondary-button" type="button" data-save-mistake>
+          <i data-lucide="bookmark-plus"></i>
+          <span>Add Phrase to Error</span>
+        </button>
+      ` : ""}
     </div>
-    <div id="practiceFeedback" class="feedback-area compact-feedback">
+    <div data-practice-feedback class="feedback-area compact-feedback">
       ${latestFeedback ? feedbackMarkup(latestFeedback) : ""}
     </div>
   `;
@@ -1194,48 +1443,56 @@ function renderSentenceStudio() {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
 
-  const checkButton = $("#checkSentenceButton", container);
-  if (checkButton) checkButton.addEventListener("click", checkPracticeSentence);
+  const checkButton = $("[data-check-sentence]", container);
+  if (checkButton) checkButton.addEventListener("click", () => checkPracticeSentence(container));
 
-  const saveMistakeButton = $("#saveMistakeButton", container);
-  if (saveMistakeButton) saveMistakeButton.addEventListener("click", saveLatestMistake);
+  const saveMistakeButton = $("[data-save-mistake]", container);
+  if (saveMistakeButton) saveMistakeButton.addEventListener("click", () => saveLatestMistake(container));
 }
 
 function saveCurrentChunk() {
   if (!currentAnalysis) return;
 
-  const exists = state.chunks.some(
+  let chunk = state.chunks.find(
     (chunk) => chunk.phrase.toLowerCase() === currentAnalysis.phrase.toLowerCase() && chunk.sourceMaterialId === currentAnalysis.materialId
   );
 
-  if (exists) {
-    toast("This phrase is already saved");
-    return;
+  if (!chunk) {
+    chunk = {
+      id: createId("chk"),
+      phrase: currentAnalysis.phrase,
+      meaning: currentAnalysis.meaning,
+      sourceMaterialId: currentAnalysis.materialId,
+      sourceTitle: currentAnalysis.sourceTitle,
+      sentence: currentAnalysis.sentence,
+      tag: currentAnalysis.tag,
+      status: "learning",
+      analysis: currentAnalysis.analysis,
+      practiceHistory: [...(currentAnalysis.practiceHistory || [])],
+      createdAt: new Date().toISOString()
+    };
+    state.chunks.unshift(chunk);
   }
 
-  const chunk = {
-    id: createId("chk"),
-    phrase: currentAnalysis.phrase,
-    meaning: currentAnalysis.meaning,
-    sourceMaterialId: currentAnalysis.materialId,
-    sourceTitle: currentAnalysis.sourceTitle,
-    sentence: currentAnalysis.sentence,
-    tag: currentAnalysis.tag,
-    status: "learning",
-    analysis: currentAnalysis.analysis,
-    createdAt: new Date().toISOString()
-  };
-
-  state.chunks.unshift(chunk);
+  const material = state.materials.find((item) => item.id === currentAnalysis.materialId);
+  const capture = material?.captures?.find((item) => item.id === activeCaptureId);
+  if (capture) {
+    capture.linkedChunkId = chunk.id;
+    capture.practiceHistory = (capture.practiceHistory || []).map((entry) => ({ ...entry, chunkId: chunk.id }));
+    chunk.practiceHistory = [...capture.practiceHistory];
+  }
+  state.attempts.forEach((attempt) => {
+    if (attempt.chunkId === currentAnalysis.id) attempt.chunkId = chunk.id;
+  });
   activeChunkId = chunk.id;
+  activePhraseDetailId = chunk.id;
   saveState();
   renderAll();
-  toast("Phrase saved. It is ready for sentence practice");
+  toast("Saved to Phrase with its analysis and practice history");
 }
 
-function checkPracticeSentence() {
-  const scope = activeView === "sentences" ? $("#sentenceStudio") : $("#materialDetail");
-  const sentence = $("#practiceSentence", scope || document)?.value.trim();
+function checkPracticeSentence(scope = currentPracticeScope()) {
+  const sentence = $("[data-practice-sentence]", scope || document)?.value.trim();
   const chunk = getActivePracticeChunk();
 
   if (!chunk) {
@@ -1248,20 +1505,82 @@ function checkPracticeSentence() {
   }
 
   latestFeedback = analyseSentence(sentence, chunk);
-  state.attempts.unshift({
+  const practiceEntry = {
     id: createId("att"),
     chunkId: chunk.id || "",
     sentence,
     corrected: latestFeedback.corrected,
+    feedback: latestFeedback,
     createdAt: new Date().toISOString()
-  });
+  };
+  state.attempts.unshift(practiceEntry);
+
+  if (activeView === "materials") {
+    const material = state.materials.find((item) => item.id === activeMaterialId);
+    const capture = material?.captures?.find((item) => item.id === activeCaptureId);
+    if (capture) {
+      capture.practiceHistory = [practiceEntry, ...(capture.practiceHistory || [])];
+      capture.latestFeedback = latestFeedback;
+      if (capture.linkedChunkId) {
+        const linkedChunk = state.chunks.find((item) => item.id === capture.linkedChunkId);
+        if (linkedChunk) linkedChunk.practiceHistory = [practiceEntry, ...(linkedChunk.practiceHistory || [])];
+      }
+    }
+  } else if (activeView === "mistakes") {
+    const mistake = state.mistakes.find((item) => item.id === activeErrorId);
+    if (mistake) {
+      mistake.morePractice = [practiceEntry, ...(mistake.morePractice || [])];
+      mistake.latestFeedback = latestFeedback;
+    }
+  } else {
+    const savedChunk = state.chunks.find((item) => item.id === activeChunkId);
+    if (savedChunk) {
+      savedChunk.practiceHistory = [practiceEntry, ...(savedChunk.practiceHistory || [])];
+      savedChunk.latestFeedback = latestFeedback;
+      state.materials.forEach((material) => {
+        const linkedCapture = material.captures?.find((capture) => capture.linkedChunkId === savedChunk.id);
+        if (linkedCapture) linkedCapture.practiceHistory = [...savedChunk.practiceHistory];
+      });
+    }
+  }
   saveState();
-  $("#practiceFeedback", scope || document).innerHTML = feedbackMarkup(latestFeedback);
+  if (activeView === "chunks") {
+    renderChunks();
+    renderIcons();
+    return;
+  }
+  if (activeView === "mistakes") {
+    renderMistakes();
+    renderIcons();
+    return;
+  }
+  const feedback = $("[data-practice-feedback]", scope || document);
+  if (feedback) feedback.innerHTML = feedbackMarkup(latestFeedback);
   renderIcons();
 }
 
 function getActivePracticeChunk() {
+  if (activeView === "materials") return currentAnalysis;
+  if (activeView === "mistakes") {
+    const mistake = state.mistakes.find((item) => item.id === activeErrorId);
+    if (!mistake) return null;
+    return {
+      id: mistake.sourceChunkId || mistake.id,
+      phrase: mistake.phrase,
+      meaning: mistake.meaning,
+      sentence: mistake.sentence,
+      analysis: mistake.analysis,
+      sourceMaterialId: mistake.sourceMaterialId
+    };
+  }
   return state.chunks.find((chunk) => chunk.id === activeChunkId) || currentAnalysis;
+}
+
+function currentPracticeScope() {
+  if (activeView === "materials") return $("#materialDetail");
+  if (activeView === "chunks") return $("#chunksList");
+  if (activeView === "mistakes") return $("#mistakesList");
+  return $("#sentenceStudio");
 }
 
 function feedbackMarkup(feedback) {
@@ -1281,31 +1600,53 @@ function feedbackMarkup(feedback) {
   `;
 }
 
-function saveLatestMistake() {
+function saveLatestMistake(scope = currentPracticeScope()) {
   if (!latestFeedback) {
-    checkPracticeSentence();
+    checkPracticeSentence(scope);
     if (!latestFeedback) return;
   }
 
   const chunk = getActivePracticeChunk();
-  state.mistakes.unshift({
-    id: createId("err"),
-    category: latestFeedback.category,
-    original: latestFeedback.original,
-    corrected: latestFeedback.corrected,
-    note: latestFeedback.notes.join(" "),
-    sourceChunkId: chunk?.id || "",
-    sourceMaterialId: chunk?.sourceMaterialId || chunk?.materialId || "",
-    mastered: false,
-    createdAt: new Date().toISOString()
-  });
+  const savedChunk = state.chunks.find((item) => item.id === chunk?.id);
+  if (!savedChunk) {
+    toast("Save this item to Phrase before adding it to Error");
+    return;
+  }
+
+  let mistake = state.mistakes.find((item) => item.sourceChunkId === savedChunk.id && !item.mastered);
+  if (!mistake) {
+    mistake = {
+      id: createId("err"),
+      category: latestFeedback.category,
+      phrase: savedChunk.phrase,
+      meaning: savedChunk.meaning,
+      sentence: savedChunk.sentence,
+      analysis: savedChunk.analysis,
+      practiceHistory: [...(savedChunk.practiceHistory || [])],
+      morePractice: [],
+      original: latestFeedback.original,
+      corrected: latestFeedback.corrected,
+      note: latestFeedback.notes.join(" "),
+      sourceChunkId: savedChunk.id,
+      sourceMaterialId: savedChunk.sourceMaterialId || "",
+      mastered: false,
+      createdAt: new Date().toISOString()
+    };
+    state.mistakes.unshift(mistake);
+  } else {
+    mistake.original = latestFeedback.original;
+    mistake.corrected = latestFeedback.corrected;
+    mistake.note = latestFeedback.notes.join(" ");
+    mistake.practiceHistory = [...(savedChunk.practiceHistory || [])];
+  }
+  activeErrorId = mistake.id;
   saveState();
   renderStats();
   renderMistakes();
-  toast("Added to Error Review");
+  toast("Phrase moved to Error for more practice");
 }
 
-function renderChunks() {
+function renderChunksLegacy() {
   const filter = $("#chunkFilter")?.value || "all";
   const chunks = filter === "all" ? state.chunks : state.chunks.filter((chunk) => chunk.tag === filter);
   const list = $("#chunksList");
@@ -1361,7 +1702,7 @@ function renderChunks() {
   });
 }
 
-function renderMistakes() {
+function renderMistakesLegacy() {
   const filter = $("#mistakeFilter")?.value || "all";
   const mistakes = filter === "all" ? state.mistakes : state.mistakes.filter((mistake) => mistake.category === filter);
   const list = $("#mistakesList");
@@ -1413,8 +1754,251 @@ function renderMistakes() {
   });
 }
 
+function renderChunks() {
+  const filter = $("#chunkFilter")?.value || "all";
+  const chunks = filter === "all" ? state.chunks : state.chunks.filter((chunk) => chunk.tag === filter);
+  const list = $("#chunksList");
+
+  if (!chunks.length) {
+    list.innerHTML = `<div class="detail-empty">No phrases yet</div>`;
+    return;
+  }
+
+  const activeChunk = chunks.find((chunk) => chunk.id === activePhraseDetailId) || null;
+  if (activeView === "chunks") latestFeedback = activeChunk?.latestFeedback || null;
+  const materialTone = new Map();
+  let nextTone = 1;
+  chunks.forEach((chunk) => {
+    const sourceKey = chunk.sourceMaterialId || "standalone";
+    if (!materialTone.has(sourceKey)) {
+      materialTone.set(sourceKey, nextTone);
+      nextTone = nextTone === 5 ? 1 : nextTone + 1;
+    }
+  });
+
+  list.innerHTML = `
+    <div class="phrase-notebook-grid">
+      ${chunks.map((chunk, index) => {
+        const sourceKey = chunk.sourceMaterialId || "standalone";
+        const tone = materialTone.get(sourceKey) || 1;
+        return `
+          <button class="phrase-notebook-card phrase-tone-${tone}" type="button" data-open-phrase="${escapeAttribute(chunk.id)}">
+            <span class="phrase-order">${String(index + 1).padStart(2, "0")}</span>
+            <strong>${escapeHtml(chunk.phrase)}</strong>
+            <small>${escapeHtml(chunk.sourceTitle || "Personal phrase")}</small>
+            <span class="phrase-card-meta">${chunk.practiceHistory?.length || 0} sentences</span>
+          </button>
+        `;
+      }).join("")}
+    </div>
+    ${activeChunk ? `
+      <div class="phrase-detail-overlay" data-phrase-overlay role="dialog" aria-modal="true" aria-label="${escapeAttribute(activeChunk.phrase)} details">
+        <section class="phrase-detail-sheet">
+          <div class="phrase-detail-head">
+            <div><p class="section-label">Phrase</p><h2>${escapeHtml(activeChunk.phrase)}</h2></div>
+            <button class="icon-button" type="button" data-close-phrase aria-label="Close phrase details" title="Close phrase details"><i data-lucide="x"></i></button>
+          </div>
+          ${renderPhraseBankWorkspace(activeChunk)}
+        </section>
+      </div>
+    ` : ""}
+  `;
+
+  $$('[data-open-phrase]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextId = button.dataset.openPhrase;
+      activePhraseDetailId = activePhraseDetailId === nextId ? null : nextId;
+      activeChunkId = nextId;
+      latestFeedback = state.chunks.find((item) => item.id === nextId)?.latestFeedback || null;
+      renderChunks();
+      renderIcons();
+    });
+  });
+
+  $("[data-close-phrase]", list)?.addEventListener("click", () => {
+    activePhraseDetailId = null;
+    renderChunks();
+    renderIcons();
+  });
+  $("[data-phrase-overlay]", list)?.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget) return;
+    activePhraseDetailId = null;
+    renderChunks();
+    renderIcons();
+  });
+
+  $$('[data-open-source-material]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const chunk = state.chunks.find((item) => item.id === button.dataset.openSourceMaterial);
+      if (!chunk) return;
+      activeMaterialId = chunk.sourceMaterialId || activeMaterialId;
+      activeCaptureId = state.materials
+        .find((material) => material.id === activeMaterialId)
+        ?.captures?.find((capture) => capture.linkedChunkId === chunk.id)?.id || null;
+      switchView("materials");
+    });
+  });
+
+  $$('[data-voice-target]', list).forEach((button) => {
+    button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
+  });
+  $("[data-check-sentence]", list)?.addEventListener("click", () => checkPracticeSentence(list));
+  $("[data-save-mistake]", list)?.addEventListener("click", () => saveLatestMistake(list));
+
+  $$('[data-delete-chunk]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.deleteChunk;
+      state.chunks = state.chunks.filter((chunk) => chunk.id !== id);
+      state.materials.forEach((material) => {
+        material.captures?.forEach((capture) => {
+          if (capture.linkedChunkId === id) capture.linkedChunkId = "";
+        });
+      });
+      activeChunkId = state.chunks[0]?.id || "";
+      activePhraseDetailId = null;
+      saveState();
+      renderAll();
+      toast("Phrase deleted");
+    });
+  });
+}
+
+function renderPhraseBankWorkspace(chunk) {
+  return `
+    ${renderPhraseKnowledge(chunk)}
+    ${renderPracticeHistory(chunk.practiceHistory, "Sentence History")}
+    <section class="inline-sentence-practice practice-card">
+      ${renderPracticeCard(chunk, true)}
+    </section>
+    <div class="detail-actions-row">
+      ${chunk.sourceMaterialId ? `<button class="ghost-button" type="button" data-open-source-material="${escapeAttribute(chunk.id)}"><i data-lucide="headphones"></i><span>Open Source Material</span></button>` : ""}
+      <button class="ghost-button" type="button" data-delete-chunk="${escapeAttribute(chunk.id)}"><i data-lucide="trash-2"></i><span>Delete Phrase</span></button>
+    </div>
+  `;
+}
+
+function renderPhraseKnowledge(item) {
+  const analysis = item.analysis || buildChunkAnalysis(item.phrase || "This phrase", item.meaning || "", item.sentence || "");
+  return `
+    <div class="capture-understanding">
+      <span>My understanding</span>
+      <p>${escapeHtml(item.meaning || "No understanding added")}</p>
+    </div>
+    <div class="analysis-grid capture-analysis-grid">
+      <article><span>Full meaning</span><p>${escapeHtml(analysis.definition)}</p></article>
+      <article><span>Range of use</span><p>${escapeHtml(analysis.range)}</p></article>
+      <article><span>Common collocations</span><p>${escapeHtml(analysis.collocations)}</p></article>
+      <article><span>Common pitfall</span><p>${escapeHtml(analysis.warning)}</p></article>
+    </div>
+    <div class="example-stack">
+      ${(analysis.examples || []).map((example) => `<p>${escapeHtml(example)}</p>`).join("")}
+    </div>
+  `;
+}
+
+function renderPracticeHistory(entries = [], title = "Practice History") {
+  return `
+    <section class="practice-history">
+      <div class="practice-history-head"><h3>${escapeHtml(title)}</h3><span>${entries.length}</span></div>
+      ${entries.length ? `
+        <div class="practice-history-list">
+          ${entries.map((entry) => `
+            <article>
+              <p>${escapeHtml(entry.sentence || "")}</p>
+              ${entry.corrected && entry.corrected !== entry.sentence ? `<small>${escapeHtml(entry.corrected)}</small>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      ` : `<p class="small-note">No sentence practice yet.</p>`}
+    </section>
+  `;
+}
+
+function renderMistakes() {
+  const filter = $("#mistakeFilter")?.value || "all";
+  const mistakes = filter === "all" ? state.mistakes : state.mistakes.filter((mistake) => mistake.category === filter);
+  const list = $("#mistakesList");
+
+  if (!mistakes.length) {
+    list.innerHTML = `<div class="detail-empty">No saved errors</div>`;
+    return;
+  }
+
+  const activeError = mistakes.find((mistake) => mistake.id === activeErrorId) || null;
+  if (activeView === "mistakes") latestFeedback = activeError?.latestFeedback || null;
+  list.innerHTML = mistakes.map((mistake, index) => {
+    const isOpen = mistake.id === activeErrorId;
+    return `
+      <article class="error-phrase ${mistake.mastered ? "is-mastered" : ""} ${isOpen ? "is-open" : ""}">
+        <button class="error-phrase-row" type="button" data-open-error="${escapeAttribute(mistake.id)}" aria-expanded="${isOpen}">
+          <span class="phrase-order">${String(index + 1).padStart(2, "0")}</span>
+          <strong>${escapeHtml(mistake.phrase || "Saved sentence error")}</strong>
+          <span class="pill ${mistake.category === "Grammar" ? "" : "amber"}">${escapeHtml(mistake.category)}</span>
+          <i data-lucide="chevron-down"></i>
+        </button>
+        ${isOpen ? `<div class="error-phrase-detail">${renderErrorWorkspace(mistake)}</div>` : ""}
+      </article>
+    `;
+  }).join("");
+
+  $$('[data-open-error]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextId = button.dataset.openError;
+      activeErrorId = activeErrorId === nextId ? null : nextId;
+      latestFeedback = state.mistakes.find((item) => item.id === nextId)?.latestFeedback || null;
+      renderMistakes();
+      renderIcons();
+    });
+  });
+
+  $$('[data-voice-target]', list).forEach((button) => {
+    button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
+  });
+  $("[data-check-sentence]", list)?.addEventListener("click", () => checkPracticeSentence(list));
+
+  $$('[data-toggle-mastered]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      const mistake = state.mistakes.find((item) => item.id === button.dataset.toggleMastered);
+      if (mistake) mistake.mastered = !mistake.mastered;
+      saveState();
+      renderAll();
+    });
+  });
+
+  $$('[data-delete-mistake]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      state.mistakes = state.mistakes.filter((item) => item.id !== button.dataset.deleteMistake);
+      activeErrorId = null;
+      saveState();
+      renderAll();
+      toast("Error deleted");
+    });
+  });
+}
+
+function renderErrorWorkspace(mistake) {
+  return `
+    ${renderPhraseKnowledge(mistake)}
+    ${renderPracticeHistory(mistake.practiceHistory, "Phrase Practice Before Error")}
+    <section class="saved-error-summary">
+      <span>Why it is here</span>
+      <p class="mistake-original">${escapeHtml(mistake.original || "")}</p>
+      <p class="mistake-fixed">${escapeHtml(mistake.corrected || "")}</p>
+      <small>${escapeHtml(mistake.note || "")}</small>
+    </section>
+    <section class="inline-sentence-practice practice-card more-practice-card">
+      ${renderPracticeCard(mistake, false, "More Practice")}
+    </section>
+    ${renderPracticeHistory(mistake.morePractice, "More Practice History")}
+    <div class="detail-actions-row">
+      <button class="secondary-button" type="button" data-toggle-mastered="${escapeAttribute(mistake.id)}"><i data-lucide="${mistake.mastered ? "undo-2" : "check"}"></i><span>${mistake.mastered ? "Restore" : "Mastered"}</span></button>
+      <button class="ghost-button" type="button" data-delete-mistake="${escapeAttribute(mistake.id)}"><i data-lucide="trash-2"></i><span>Delete Error</span></button>
+    </div>
+  `;
+}
+
 function startVoiceInput(targetId, lang, button) {
-  const target = document.getElementById(targetId);
+  const target = button.closest(".voice-field")?.querySelector("input, textarea") || document.getElementById(targetId);
   if (!target) return;
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;

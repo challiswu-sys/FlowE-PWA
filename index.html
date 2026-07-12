@@ -12,9 +12,9 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
     <link rel="icon" href="./assets/icon-192.png" sizes="192x192" type="image/png">
-    <link rel="stylesheet" href="./styles.css?v=media-3">
+    <link rel="stylesheet" href="./styles.css?v=materials-6">
     <script defer src="./assets/lucide.min.js"></script>
-    <script defer src="./app.js?v=media-3"></script>
+    <script defer src="./app.js?v=materials-6"></script>
   </head>
   <body>
     <div class="shell">
@@ -29,13 +29,13 @@
             <i data-lucide="headphones"></i>
             <span>Materials</span>
           </button>
-          <button class="nav-button" type="button" data-nav="sentences">
+          <button class="nav-button" type="button" data-nav="chunks">
             <i data-lucide="notebook-pen"></i>
-            <span>Practice</span>
+            <span>Phrase</span>
           </button>
           <button class="nav-button" type="button" data-nav="mistakes">
             <i data-lucide="rotate-ccw"></i>
-            <span>Review</span>
+            <span>Error</span>
           </button>
           <button class="nav-button" type="button" data-nav="profile">
             <i data-lucide="circle-user-round"></i>
@@ -43,15 +43,6 @@
           </button>
         </nav>
 
-        <div class="top-actions">
-          <button class="icon-button" type="button" id="exportButton" aria-label="Export data" title="Export data">
-            <i data-lucide="download"></i>
-          </button>
-          <label class="icon-button file-action" aria-label="Import backup" title="Import backup">
-            <i data-lucide="upload"></i>
-            <input id="backupInput" type="file" accept="application/json">
-          </label>
-        </div>
       </header>
 
       <main>
@@ -84,13 +75,7 @@
                 <button class="text-button" type="button" data-nav="materials">See all <i data-lucide="arrow-up-right"></i></button>
               </div>
             </div>
-            <button class="journey-card" type="button" data-nav="materials">
-              <span class="journey-copy">
-                <span class="journey-tag"><i data-lucide="headphones"></i> Today’s listening</span>
-                <strong>Start with what interests you</strong>
-                <span>Import video, audio and transcripts, then capture natural expressions as you listen.</span>
-                <span class="journey-meta"><b id="homeMaterialCountCard">0</b> material packs</span>
-              </span>
+            <button class="journey-card cover-only" type="button" data-nav="materials">
               <span class="material-preview-grid" id="frequentMaterialsPreview" aria-label="Frequently used materials">
                 <span class="material-preview placeholder-one"></span>
                 <span class="material-preview placeholder-two"></span>
@@ -148,14 +133,23 @@
                   <p class="section-label">Library</p>
                   <h2>My Materials</h2>
                 </div>
+                <button class="secondary-button compact-action" id="manageAddMaterialButton" type="button">
+                  <i data-lucide="plus"></i>
+                  <span>Add</span>
+                </button>
               </div>
               <div id="materialsList" class="item-list"></div>
 
-              <details class="import-drawer" id="materialImporter">
-                <summary>
-                  <i data-lucide="folder-plus"></i>
-                  <span>Import New Material</span>
-                </summary>
+              <section class="material-editor" id="materialImporter" hidden>
+                <div class="material-editor-head">
+                  <div>
+                    <p class="section-label" id="materialFormMode">New material</p>
+                    <h3 id="materialFormTitle">Add Material</h3>
+                  </div>
+                  <button class="icon-button" id="cancelMaterialEditButton" type="button" aria-label="Close material editor" title="Close material editor">
+                    <i data-lucide="x"></i>
+                  </button>
+                </div>
                 <form id="materialForm" class="form-stack">
                   <label>
                     <span>Title</span>
@@ -168,18 +162,22 @@
                   <label>
                     <span>Video file</span>
                     <input id="videoInput" type="file">
+                    <small class="current-file" id="currentVideoFile"></small>
                   </label>
                   <label>
                     <span>Audio file</span>
                     <input id="audioInput" type="file">
+                    <small class="current-file" id="currentAudioFile"></small>
                   </label>
                   <label>
                     <span>Cover image</span>
                     <input id="coverInput" type="file">
+                    <small class="current-file" id="currentCoverFile"></small>
                   </label>
                   <label>
                     <span>Subtitle / transcript file</span>
                     <input id="transcriptInput" type="file">
+                    <small class="current-file" id="currentTranscriptFile"></small>
                   </label>
                   <label>
                     <span>Transcript</span>
@@ -188,10 +186,10 @@
                   <p class="small-note">On iPhone, choose each file separately from the Files app.</p>
                   <button class="primary-button" type="submit">
                     <i data-lucide="save"></i>
-                    <span>Save Material</span>
+                    <span id="materialSubmitLabel">Save Material</span>
                   </button>
                 </form>
-              </details>
+              </section>
             </aside>
 
             <section class="detail-panel material-workbench">
@@ -318,8 +316,8 @@
 
     <nav class="mobile-tabbar" aria-label="Mobile navigation">
       <button type="button" data-nav="materials"><i data-lucide="headphones"></i><span>Materials</span></button>
-      <button type="button" data-nav="sentences"><i data-lucide="notebook-pen"></i><span>Practice</span></button>
-      <button type="button" data-nav="mistakes"><i data-lucide="refresh-cw"></i><span>Review</span></button>
+      <button type="button" data-nav="chunks"><i data-lucide="notebook-pen"></i><span>Phrase</span></button>
+      <button type="button" data-nav="mistakes"><i data-lucide="refresh-cw"></i><span>Error</span></button>
       <button type="button" data-nav="profile"><i data-lucide="circle-user-round"></i><span>Profile</span></button>
     </nav>
 
