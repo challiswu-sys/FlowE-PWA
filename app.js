@@ -94,6 +94,10 @@ function initialView() {
 }
 
 function loadState() {
+  if (isDemoPreview()) {
+    return normalizeState(buildDemoPreviewState());
+  }
+
   const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
   if (saved) {
     try {
@@ -123,15 +127,135 @@ function loadState() {
   });
 }
 
+function isDemoPreview() {
+  return new URLSearchParams(window.location.search).has("demo");
+}
+
+function buildDemoPreviewState() {
+  const now = new Date().toISOString();
+  const materialId = "demo_material_1";
+  const stuckChunk = {
+    id: "demo_chunk_stuck",
+    phrase: "Stuck with it",
+    meaning: "坚持做",
+    sourceMaterialId: materialId,
+    sourceTitle: "American Comedy: Controversial History",
+    sentence: "I stuck with it because I wanted to finish what I started.",
+    tag: "Listening",
+    status: "learning",
+    createdAt: now,
+    practiceHistory: [
+      {
+        id: "demo_attempt_1",
+        chunkId: "demo_chunk_stuck",
+        sentence: "I stuck with it even when the topic was hard",
+        corrected: "I stuck with it even when the topic was hard.",
+        feedback: {
+          corrected: "I stuck with it even when the topic was hard.",
+          notes: ["Add sentence-ending punctuation to make the sentence complete."],
+          focus: "Keep the target phrase in a personal sentence.",
+          category: "Grammar"
+        },
+        createdAt: now
+      }
+    ]
+  };
+  const storyChunk = {
+    id: "demo_chunk_story",
+    phrase: "A specific inspiring story",
+    meaning: "一个鼓舞人心的故事",
+    sourceMaterialId: materialId,
+    sourceTitle: "American Comedy: Controversial History",
+    sentence: "He wanted a specific inspiring story, not a vague answer.",
+    tag: "Listening",
+    status: "learning",
+    createdAt: now,
+    practiceHistory: []
+  };
+
+  stuckChunk.analysis = buildChunkAnalysis(stuckChunk.phrase, stuckChunk.meaning, stuckChunk.sentence);
+  storyChunk.analysis = buildChunkAnalysis(storyChunk.phrase, storyChunk.meaning, storyChunk.sentence);
+
+  return {
+    materials: [
+      {
+        id: materialId,
+        title: "American Comedy: Controversial History",
+        source: "http://xhslink.com/o/1wXnrAknwZg",
+        videoName: "demo-video.mp4",
+        videoType: "video/mp4",
+        audioName: "demo-audio.mp3",
+        audioType: "audio/mpeg",
+        coverName: "demo-cover.jpg",
+        transcriptName: "demo-subtitles.srt",
+        transcript: "I stuck with it because I wanted to finish what I started.\nHe wanted a specific inspiring story, not a vague answer.",
+        segments: [
+          { start: 0, end: 4, text: "I stuck with it because I wanted to finish what I started." },
+          { start: 4, end: 9, text: "He wanted a specific inspiring story, not a vague answer." }
+        ],
+        captures: [
+          {
+            id: "demo_capture_stuck",
+            phrase: stuckChunk.phrase,
+            meaning: stuckChunk.meaning,
+            sentence: stuckChunk.sentence,
+            analysis: stuckChunk.analysis,
+            linkedChunkId: stuckChunk.id,
+            practiceHistory: [...stuckChunk.practiceHistory],
+            createdAt: now
+          },
+          {
+            id: "demo_capture_story",
+            phrase: storyChunk.phrase,
+            meaning: storyChunk.meaning,
+            sentence: storyChunk.sentence,
+            analysis: storyChunk.analysis,
+            linkedChunkId: storyChunk.id,
+            practiceHistory: [],
+            createdAt: now
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
+    ],
+    chunks: [stuckChunk, storyChunk],
+    mistakes: [],
+    attempts: [...stuckChunk.practiceHistory],
+    practiceLog: {
+      [dateKey(new Date())]: 42
+    },
+    profile: {},
+    ieltsHistory: []
+  };
+}
+
 function normalizeState(nextState) {
   const blockedSourceIds = new Set([...BLOCKED_PUBLIC_MATERIAL_IDS]);
   const chunks = (nextState.chunks || [])
     .filter((chunk) => !blockedSourceIds.has(chunk.sourceMaterialId))
-    .map((chunk) => ({ ...chunk, tag: translateLegacyLabel(chunk.tag) }));
+    .map((chunk) => ({
+      ...chunk,
+      tag: translateLegacyLabel(chunk.tag),
+      meaning: chunk.meaning || "",
+      sentence: chunk.sentence || "",
+      analysis: chunk.analysis || buildChunkAnalysis(chunk.phrase || "This phrase", chunk.meaning || "", chunk.sentence || ""),
+      practiceHistory: chunk.practiceHistory || []
+    }));
   const materials = (nextState.materials || [])
     .filter((item) => !BLOCKED_PUBLIC_MATERIAL_IDS.has(item.id))
     .map((material) => {
-      const captures = Array.isArray(material.captures) ? [...material.captures] : [];
+      const captures = Array.isArray(material.captures)
+        ? material.captures.map((capture) => ({
+            ...capture,
+            phrase: capture.phrase || "",
+            meaning: capture.meaning || "",
+            sentence: capture.sentence || "",
+            linkedChunkId: capture.linkedChunkId || "",
+            analysis: capture.analysis || buildChunkAnalysis(capture.phrase || "This phrase", capture.meaning || "", capture.sentence || ""),
+            practiceHistory: capture.practiceHistory || []
+          }))
+        : [];
       chunks
         .filter((chunk) => chunk.sourceMaterialId === material.id)
         .forEach((chunk) => {
@@ -204,25 +328,49 @@ function translateLegacyLabel(value = "") {
 }
 
 function saveState() {
+  if (isDemoPreview()) return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function bindNavigation() {
   $$("[data-nav], [data-goto]").forEach((element) => {
-    element.addEventListener("click", () => {
+    element.addEventListener("click", (event) => {
+      event.preventDefault();
       const target = element.dataset.nav || element.dataset.goto;
-      if (target) switchView(target);
+      if (target) switchView(target, { resetDetail: true, scrollTop: true });
     });
   });
 }
 
-function switchView(view) {
+function resetViewState(view) {
+  sentenceComposerKey = null;
+  latestFeedback = null;
+
+  if (view === "materials") {
+    activeCaptureId = null;
+    captureEditorOpen = false;
+    currentAnalysis = null;
+  }
+  if (view === "chunks") {
+    activePhraseDetailId = null;
+  }
+  if (view === "mistakes") {
+    activeErrorId = null;
+  }
+}
+
+function switchView(view, options = {}) {
+  const { resetDetail = false, scrollTop = false } = options;
+  if (resetDetail) resetViewState(view);
   activeView = view;
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.view === view));
   $$(".nav-button").forEach((button) => button.classList.toggle("is-active", button.dataset.nav === view));
   $$(".mobile-tabbar button").forEach((button) => button.classList.toggle("is-active", button.dataset.nav === view));
   window.history.replaceState(null, "", `#${view}`);
   renderAll();
+  if (scrollTop) {
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+  }
 }
 
 function bindForms() {
@@ -911,7 +1059,7 @@ function renderMaterials() {
       captureEditorOpen = false;
       currentAnalysis = null;
       latestFeedback = null;
-      renderAll();
+      renderPreservingScroll(() => renderAll());
     });
   });
 
@@ -984,9 +1132,9 @@ async function renderMaterialDetail() {
     latestFeedback = null;
   }
 
-  const sourceLink = material.source
-    ? `<a class="ghost-button" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer">Source</a>`
-    : "";
+  const materialTitle = material.source
+    ? `<a class="material-title-link" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer" title="Open source link">${escapeHtml(material.title)}</a>`
+    : escapeHtml(material.title);
   const videoBlock = material.videoPath || material.videoName
     ? `
       <video
@@ -1007,7 +1155,7 @@ async function renderMaterialDetail() {
     ? material.segments
         .map(
           (segment, index) => `
-            <article class="sentence-row" data-sentence="${escapeAttribute(segment.text)}">
+            <article class="sentence-row" data-segment-index="${index}" data-sentence="${escapeAttribute(segment.text)}">
               <span class="sentence-index">${index + 1}</span>
               <p class="sentence-text">${escapeHtml(segment.text)}</p>
               <button class="mini-button" type="button" data-play-segment="${index}" aria-label="Play this line">
@@ -1024,13 +1172,21 @@ async function renderMaterialDetail() {
     <div class="workbench-head">
       <div>
         <p class="section-label">Material</p>
-        <h2>${escapeHtml(material.title)}</h2>
+        <h2>${materialTitle}</h2>
       </div>
-      ${sourceLink}
     </div>
 
     ${videoBlock}
     ${audioBlock}
+
+    <details class="transcript-drawer transcript-block" id="subtitleDrawer">
+      <summary>
+        <span><i data-lucide="captions"></i> English Subtitles</span>
+        <small>${material.segments?.length || 0} lines</small>
+        <i data-lucide="chevron-down"></i>
+      </summary>
+      <div class="transcript-panel" id="transcriptPanel">${transcriptRows}</div>
+    </details>
 
     <section class="material-phrases" aria-labelledby="capturedPhrasesTitle">
       <div class="phrase-section-head">
@@ -1038,9 +1194,9 @@ async function renderMaterialDetail() {
           <h2 id="capturedPhrasesTitle">Captured Phrases <span>${material.captures.length}</span></h2>
         </div>
         ${captureEditorOpen || !material.captures.length ? "" : `
-          <button class="primary-button compact-action" type="button" id="addPhraseButton">
+          <button class="compact-action add-phrase-button" type="button" id="addPhraseButton">
             <i data-lucide="plus"></i>
-            <span>Add Phrase</span>
+            <span>Add</span>
           </button>
         `}
       </div>
@@ -1048,15 +1204,6 @@ async function renderMaterialDetail() {
       ${captureEditorOpen || !material.captures.length ? renderCaptureEditor(Boolean(material.captures.length)) : ""}
       ${renderCapturedPhraseList(material, activeCapture)}
     </section>
-
-    <details class="transcript-drawer transcript-block">
-      <summary>
-        <span><i data-lucide="captions"></i> Transcript</span>
-        <small>${material.segments?.length || 0} lines</small>
-        <i data-lucide="chevron-down"></i>
-      </summary>
-      <div class="transcript-panel" id="transcriptPanel">${transcriptRows}</div>
-    </details>
   `;
 
   const video = $("#activeVideo");
@@ -1096,7 +1243,60 @@ async function renderMaterialDetail() {
   }
 
   bindMaterialDetailEvents(material);
+  bindSubtitleSync(material, video, audio);
   renderIcons();
+}
+
+function bindSubtitleSync(material, video, audio) {
+  const drawer = $("#subtitleDrawer");
+  const panel = $("#transcriptPanel");
+  const rows = $$("[data-segment-index]", panel);
+  if (!drawer || !panel || !rows.length) return;
+
+  let activeIndex = -1;
+  const updateSubtitle = (media) => {
+    const time = media.currentTime;
+    const nextIndex = material.segments.findIndex((segment) => (
+      segment.start != null
+      && segment.end != null
+      && time >= segment.start
+      && time < segment.end
+    ));
+    if (nextIndex < 0) {
+      rows[activeIndex]?.classList.remove("is-current");
+      activeIndex = -1;
+      return;
+    }
+    if (nextIndex === activeIndex) return;
+
+    rows[activeIndex]?.classList.remove("is-current");
+    const activeRow = rows[nextIndex];
+    activeRow?.classList.add("is-current");
+    activeIndex = nextIndex;
+
+    if (drawer.open && activeRow) {
+      const targetTop = activeRow.offsetTop - (panel.clientHeight - activeRow.offsetHeight) / 2;
+      panel.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    }
+  };
+
+  [video, audio].filter(Boolean).forEach((media) => {
+    media.addEventListener("timeupdate", () => updateSubtitle(media));
+    media.addEventListener("seeked", () => updateSubtitle(media));
+    media.addEventListener("play", () => {
+      [video, audio]
+        .filter((item) => item && item !== media && !item.paused)
+        .forEach((item) => item.pause());
+      updateSubtitle(media);
+    });
+  });
+
+  drawer.addEventListener("toggle", () => {
+    if (!drawer.open || activeIndex < 0) return;
+    const activeRow = rows[activeIndex];
+    if (!activeRow) return;
+    panel.scrollTop = Math.max(0, activeRow.offsetTop - (panel.clientHeight - activeRow.offsetHeight) / 2);
+  });
 }
 
 function bindMaterialDetailEvents(material) {
@@ -1150,7 +1350,7 @@ function bindMaterialDetailEvents(material) {
     activeChunkId = "";
     latestFeedback = null;
     saveState();
-    renderMaterialDetail();
+    renderPreservingScroll(() => renderMaterialDetail());
     toast("Phrase added to this material");
   });
 
@@ -1167,7 +1367,7 @@ function bindMaterialDetailEvents(material) {
     currentAnalysis = null;
     latestFeedback = null;
     saveState();
-    renderMaterialDetail();
+    renderPreservingScroll(() => renderMaterialDetail());
     toast("Phrase removed from this material");
   });
 
@@ -1417,7 +1617,7 @@ function renderSentenceStudio() {
       </section>
     `;
     $$("[data-nav]", container).forEach((button) => {
-      button.addEventListener("click", () => switchView(button.dataset.nav));
+      button.addEventListener("click", () => switchView(button.dataset.nav, { resetDetail: true, scrollTop: true }));
     });
     return;
   }
@@ -1506,7 +1706,7 @@ function saveCurrentChunk() {
   activeChunkId = chunk.id;
   activePhraseDetailId = chunk.id;
   saveState();
-  renderAll();
+  renderPreservingScroll(() => renderAll());
   toast("Saved to Phrase with its analysis and practice history");
 }
 
@@ -1532,11 +1732,13 @@ function bindSentencePracticeControls(scope) {
 }
 
 function rerenderCurrentPracticeView() {
-  if (activeView === "materials") renderMaterialDetail();
-  else if (activeView === "chunks") renderChunks();
-  else if (activeView === "mistakes") renderMistakes();
-  else renderSentenceStudio();
-  renderIcons();
+  renderPreservingScroll(() => {
+    if (activeView === "materials") renderMaterialDetail();
+    else if (activeView === "chunks") renderChunks();
+    else if (activeView === "mistakes") renderMistakes();
+    else renderSentenceStudio();
+    renderIcons();
+  });
 }
 
 function deletePracticeSentence(entryId) {
@@ -1710,7 +1912,7 @@ function saveLatestMistake(scope = currentPracticeScope()) {
   activeErrorId = mistake.id;
   saveState();
   renderStats();
-  renderMistakes();
+  renderPreservingScroll(() => renderMistakes());
   toast("Phrase moved to Error for more practice");
 }
 
@@ -1754,7 +1956,7 @@ function renderChunksLegacy() {
       activeChunkId = chunk.id;
       activeMaterialId = chunk.sourceMaterialId || state.materials[0]?.id || activeMaterialId;
       latestFeedback = null;
-      switchView("materials");
+      switchView("materials", { resetDetail: false, scrollTop: true });
     });
   });
 
@@ -1764,7 +1966,7 @@ function renderChunksLegacy() {
       state.chunks = state.chunks.filter((chunk) => chunk.id !== id);
       activeChunkId = state.chunks[0]?.id || "";
       saveState();
-      renderAll();
+      renderPreservingScroll(() => renderAll());
       toast("Phrase deleted");
     });
   });
@@ -1878,21 +2080,27 @@ function renderChunks() {
       activePhraseDetailId = activePhraseDetailId === nextId ? null : nextId;
       activeChunkId = nextId;
       latestFeedback = state.chunks.find((item) => item.id === nextId)?.latestFeedback || null;
-      renderChunks();
-      renderIcons();
+      renderPreservingScroll(() => {
+        renderChunks();
+        renderIcons();
+      });
     });
   });
 
   $("[data-close-phrase]", list)?.addEventListener("click", () => {
     activePhraseDetailId = null;
-    renderChunks();
-    renderIcons();
+    renderPreservingScroll(() => {
+      renderChunks();
+      renderIcons();
+    });
   });
   $("[data-phrase-overlay]", list)?.addEventListener("click", (event) => {
     if (event.target !== event.currentTarget) return;
     activePhraseDetailId = null;
-    renderChunks();
-    renderIcons();
+    renderPreservingScroll(() => {
+      renderChunks();
+      renderIcons();
+    });
   });
 
   $$('[data-open-source-material]', list).forEach((button) => {
@@ -1903,7 +2111,7 @@ function renderChunks() {
       activeCaptureId = state.materials
         .find((material) => material.id === activeMaterialId)
         ?.captures?.find((capture) => capture.linkedChunkId === chunk.id)?.id || null;
-      switchView("materials");
+      switchView("materials", { resetDetail: false, scrollTop: true });
     });
   });
 
@@ -1924,7 +2132,7 @@ function renderChunks() {
       activeChunkId = state.chunks[0]?.id || "";
       activePhraseDetailId = null;
       saveState();
-      renderAll();
+      renderPreservingScroll(() => renderAll());
       toast("Phrase deleted");
     });
   });
@@ -1955,12 +2163,8 @@ function renderPhraseKnowledge(item) {
 function renderMeaningFeedback(item) {
   const known = getKnownChunk(item.phrase || "");
   const analysis = item.analysis || buildChunkAnalysis(item.phrase || "This phrase", item.meaning || "", item.sentence || "");
-  const englishDefinition = known?.definition || analysis.definition;
-  const chineseKeywords = known?.chineseKeywords || [];
-  const hasKnownMatch = chineseKeywords.length > 0;
-  const chineseMatchCount = chineseKeywords.filter((keyword) => (item.meaning || "").includes(keyword)).length;
-  const accurate = hasKnownMatch && chineseMatchCount >= Math.min(2, chineseKeywords.length);
-  const suggestedChinese = known?.suggestedChinese || item.meaning || "Add a Chinese interpretation.";
+  const review = getChineseMeaningReview(item, known);
+  const englishDefinition = known?.definition || cleanEnglishDefinition(item, analysis);
 
   return `
     <section class="meaning-feedback">
@@ -1968,11 +2172,11 @@ function renderMeaningFeedback(item) {
         <span>My Chinese interpretation</span>
         <p>${escapeHtml(item.meaning || "No interpretation added")}</p>
       </div>
-      <div class="meaning-feedback-row chinese-meaning-feedback ${accurate ? "is-correct" : "needs-correction"}">
+      <div class="meaning-feedback-row chinese-meaning-feedback ${review.status === "correct" ? "is-correct" : "needs-correction"}">
         <span>Chinese meaning feedback</span>
-        ${accurate
+        ${review.status === "correct"
           ? `<p class="meaning-verdict"><i data-lucide="check"></i> Correct</p>`
-          : `<div class="correct-version"><strong>Correct version</strong><p>${escapeHtml(suggestedChinese)}</p></div>`}
+          : `<div class="correct-version"><strong>${escapeHtml(review.label)}</strong><p>${escapeHtml(review.text)}</p></div>`}
       </div>
       <div class="meaning-feedback-row english-supplement">
         <span>English definition</span>
@@ -1980,6 +2184,44 @@ function renderMeaningFeedback(item) {
       </div>
     </section>
   `;
+}
+
+function getChineseMeaningReview(item, known) {
+  const meaning = item.meaning || "";
+  if (!meaning.trim()) {
+    return {
+      status: "needs-correction",
+      label: "Better meaning",
+      text: "Add your Chinese understanding first, then compare it with the source context."
+    };
+  }
+
+  if (!known?.chineseKeywords?.length) {
+    return {
+      status: "needs-correction",
+      label: "Better meaning",
+      text: "Use the source sentence to confirm the exact Chinese meaning, then save a tighter version here."
+    };
+  }
+
+  const chineseMatchCount = known.chineseKeywords.filter((keyword) => meaning.includes(keyword)).length;
+  const accurate = chineseMatchCount >= Math.min(2, known.chineseKeywords.length);
+  return accurate
+    ? { status: "correct", label: "Correct", text: "Correct" }
+    : {
+        status: "needs-correction",
+        label: "Better meaning",
+        text: known.suggestedChinese || meaning
+      };
+}
+
+function cleanEnglishDefinition(item, analysis) {
+  if (analysis?.definition && !analysis.definition.startsWith("Learn “")) return analysis.definition;
+  const phrase = item.phrase || "this phrase";
+  if (item.sentence) {
+    return `In the source sentence, “${phrase}” should be understood as one complete expression. Use the surrounding words to confirm its exact meaning and tone.`;
+  }
+  return `A saved expression from your material. Learn “${phrase}” as one complete phrase, then confirm its exact meaning from the source context.`;
 }
 
 function renderPracticeHistory(entries = [], title = "Practice History") {
@@ -2032,8 +2274,10 @@ function renderMistakes() {
       const nextId = button.dataset.openError;
       activeErrorId = activeErrorId === nextId ? null : nextId;
       latestFeedback = state.mistakes.find((item) => item.id === nextId)?.latestFeedback || null;
-      renderMistakes();
-      renderIcons();
+      renderPreservingScroll(() => {
+        renderMistakes();
+        renderIcons();
+      });
     });
   });
 
@@ -2047,7 +2291,7 @@ function renderMistakes() {
       const mistake = state.mistakes.find((item) => item.id === button.dataset.toggleMastered);
       if (mistake) mistake.mastered = !mistake.mastered;
       saveState();
-      renderAll();
+      renderPreservingScroll(() => renderAll());
     });
   });
 
@@ -2056,7 +2300,7 @@ function renderMistakes() {
       state.mistakes = state.mistakes.filter((item) => item.id !== button.dataset.deleteMistake);
       activeErrorId = null;
       saveState();
-      renderAll();
+      renderPreservingScroll(() => renderAll());
       toast("Error deleted");
     });
   });
@@ -2194,6 +2438,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("falling more in love") || lower.includes("fall more in love")) {
     return {
       keywords: ["love", "deeper", "increasingly", "feelings"],
+      chineseKeywords: ["爱", "感情", "越来越", "更深"],
+      suggestedChinese: "越来越爱上；感情越来越深",
       definition: "Describes affection or emotional attachment becoming stronger, especially in romantic or intimate contexts.",
       range: "Common in conversation, storytelling and emotional language. It usually refers to people, but can be used playfully for interests or objects.",
       collocations: "feel yourself falling more in love, find yourself falling more in love, keep falling more in love",
@@ -2207,6 +2453,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("have a hard time")) {
     return {
       keywords: ["difficult", "struggle", "hard"],
+      chineseKeywords: ["困难", "吃力", "很难", "费劲"],
+      suggestedChinese: "做某事很吃力；很难做到某事",
       definition: "Says that an activity is difficult for someone. It is normally followed by an -ing form.",
       range: "Natural in both speech and writing, and often lighter and more idiomatic than very difficult for me.",
       collocations: "have a hard time doing, have a hard time with something",
@@ -2220,6 +2468,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("rabbit hole")) {
     return {
       keywords: ["deep", "absorbed", "cannot stop"],
+      chineseKeywords: ["沉迷", "越挖越深", "停不下来", "深入"],
+      suggestedChinese: "越陷越深地研究或沉迷某个话题",
       definition: "Describes becoming deeply absorbed in a topic, search or train of thought that keeps expanding.",
       range: "Common in conversation, online contexts and storytelling about research, videos, stories or interests.",
       collocations: "fall into a rabbit hole, go down a rabbit hole, a rabbit hole of stories",
@@ -2233,6 +2483,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("turn off the lights")) {
     return {
       keywords: ["switch off", "lights"],
+      chineseKeywords: ["关灯", "关掉", "灯"],
+      suggestedChinese: "关灯；把灯关掉",
       definition: "A natural everyday expression meaning to switch the lights off.",
       range: "Most common in daily conversation and also useful in narrative description.",
       collocations: "turn off the lights, turn the lights off, before we turned off the lights",
@@ -2246,6 +2498,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("find yourself")) {
     return {
       keywords: ["realise", "unexpectedly", "notice yourself"],
+      chineseKeywords: ["发现自己", "不知不觉", "意识到"],
+      suggestedChinese: "发现自己不知不觉处于某种状态或正在做某事",
       definition: "Means that you unexpectedly notice yourself in a state or doing an activity.",
       range: "Natural in storytelling and descriptions of mental change. It is often followed by an -ing form or prepositional phrase.",
       collocations: "find yourself doing, find yourself in, suddenly find yourself",
@@ -2259,6 +2513,8 @@ function getKnownChunk(phrase) {
   if (lower.includes("it turns out")) {
     return {
       keywords: ["result", "actually", "discover"],
+      chineseKeywords: ["结果", "原来", "后来发现", "实际上"],
+      suggestedChinese: "结果是；后来发现；原来",
       definition: "Introduces a fact, result or contrast that became clear later.",
       range: "Common in speech and writing for storytelling, explaining causes and correcting expectations.",
       collocations: "it turns out that, as it turns out, turned out to be",

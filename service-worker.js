@@ -1,4 +1,4 @@
-const CACHE_NAME = "flowe-shell-v20";
+const CACHE_NAME = "flowe-shell-v23";
 const APP_SHELL = [
   "./",
   "./index.html",
