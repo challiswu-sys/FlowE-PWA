@@ -347,8 +347,10 @@ function bindActions() {
 
   $("#practiceSummaryToggle")?.addEventListener("click", () => {
     practiceSummaryOpen = !practiceSummaryOpen;
-    renderHomeDashboard();
-    renderIcons();
+    renderPreservingScroll(() => {
+      renderHomeDashboard();
+      renderIcons();
+    });
   });
 
   $("#backupInput")?.addEventListener("change", async (event) => {
@@ -847,6 +849,21 @@ function renderIcons() {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function renderPreservingScroll(renderAction) {
+  const scrollTop = window.scrollY;
+  const restore = () => window.scrollTo({ top: scrollTop, left: 0, behavior: "auto" });
+  const result = renderAction();
+  restore();
+  window.requestAnimationFrame(() => {
+    restore();
+    window.requestAnimationFrame(restore);
+  });
+  if (result?.then) {
+    result.finally(() => window.requestAnimationFrame(restore));
+  }
+  return result;
+}
+
 function renderMaterials() {
   const list = $("#materialsList");
   if (!state.materials.length) {
@@ -869,18 +886,14 @@ function renderMaterials() {
           : `<span>${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
       return `
         <article class="material-item ${material.id === activeMaterialId ? "is-active" : ""}">
-          <div class="material-item-main">
+          <button class="material-item-main" type="button" data-select-material="${material.id}" aria-label="Open ${escapeAttribute(material.title)}">
             <span class="material-list-cover">${cover}</span>
             <div class="material-item-copy">
               <h3>${escapeHtml(material.title)}</h3>
               <p>${mediaLabel} · ${material.captures?.length || 0} phrases · ${material.segments?.length || 0} lines</p>
             </div>
-          </div>
+          </button>
           <div class="material-row-actions">
-            <button class="secondary-button" type="button" data-select-material="${material.id}">
-              <i data-lucide="play"></i>
-              <span>Open</span>
-            </button>
             <button class="icon-button" type="button" data-edit-material="${material.id}" aria-label="Edit ${escapeAttribute(material.title)}" title="Edit material"><i data-lucide="pencil"></i></button>
             <button class="icon-button danger-icon" type="button" data-delete-material="${material.id}" aria-label="Delete ${escapeAttribute(material.title)}" title="Delete material"><i data-lucide="trash-2"></i></button>
           </div>
@@ -1022,7 +1035,6 @@ async function renderMaterialDetail() {
     <section class="material-phrases" aria-labelledby="capturedPhrasesTitle">
       <div class="phrase-section-head">
         <div>
-          <p class="section-label">From this material</p>
           <h2 id="capturedPhrasesTitle">Captured Phrases <span>${material.captures.length}</span></h2>
         </div>
         ${captureEditorOpen || !material.captures.length ? "" : `
@@ -1095,12 +1107,12 @@ function bindMaterialDetailEvents(material) {
   $("#addPhraseButton")?.addEventListener("click", () => {
     captureEditorOpen = true;
     activeCaptureId = null;
-    renderMaterialDetail();
+    renderPreservingScroll(() => renderMaterialDetail());
   });
 
   $("#cancelCaptureButton")?.addEventListener("click", () => {
     captureEditorOpen = false;
-    renderMaterialDetail();
+    renderPreservingScroll(() => renderMaterialDetail());
   });
 
   $$('[data-open-capture]', $("#materialDetail")).forEach((button) => {
@@ -1108,7 +1120,7 @@ function bindMaterialDetailEvents(material) {
       const nextId = button.dataset.openCapture;
       activeCaptureId = activeCaptureId === nextId ? null : nextId;
       captureEditorOpen = false;
-      renderMaterialDetail();
+      renderPreservingScroll(() => renderMaterialDetail());
     });
   });
 
@@ -1948,34 +1960,20 @@ function renderMeaningFeedback(item) {
   const hasKnownMatch = chineseKeywords.length > 0;
   const chineseMatchCount = chineseKeywords.filter((keyword) => (item.meaning || "").includes(keyword)).length;
   const accurate = hasKnownMatch && chineseMatchCount >= Math.min(2, chineseKeywords.length);
-  const status = hasKnownMatch ? (accurate ? "Accurate" : "Needs correction") : "Needs confirmation";
-  const feedback = accurate
-    ? "Your Chinese interpretation captures the core meaning accurately."
-    : hasKnownMatch
-      ? "Your Chinese interpretation misses or changes part of the core meaning."
-      : "This phrase is not yet in the local meaning library, so the interpretation needs manual confirmation.";
   const suggestedChinese = known?.suggestedChinese || item.meaning || "Add a Chinese interpretation.";
 
   return `
     <section class="meaning-feedback">
-      <div class="meaning-feedback-head">
-        <div><span>Chinese meaning feedback</span><h3>${escapeHtml(status)}</h3></div>
-        <span class="meaning-status ${accurate ? "is-accurate" : hasKnownMatch ? "needs-correction" : "needs-confirmation"}">${escapeHtml(status)}</span>
-      </div>
       <div class="meaning-feedback-row">
         <span>My Chinese interpretation</span>
         <p>${escapeHtml(item.meaning || "No interpretation added")}</p>
       </div>
-      <div class="meaning-feedback-row">
-        <span>Feedback</span>
-        <p>${escapeHtml(feedback)}</p>
+      <div class="meaning-feedback-row chinese-meaning-feedback ${accurate ? "is-correct" : "needs-correction"}">
+        <span>Chinese meaning feedback</span>
+        ${accurate
+          ? `<p class="meaning-verdict"><i data-lucide="check"></i> Correct</p>`
+          : `<div class="correct-version"><strong>Correct version</strong><p>${escapeHtml(suggestedChinese)}</p></div>`}
       </div>
-      ${hasKnownMatch && !accurate ? `
-        <div class="meaning-feedback-row">
-          <span>Suggested Chinese</span>
-          <p>${escapeHtml(suggestedChinese)}</p>
-        </div>
-      ` : ""}
       <div class="meaning-feedback-row english-supplement">
         <span>English definition</span>
         <p>${escapeHtml(englishDefinition)}</p>
@@ -2169,6 +2167,18 @@ function buildChunkAnalysis(phrase, meaning, sourceSentence = "") {
 
 function getKnownChunk(phrase) {
   const lower = phrase.toLowerCase();
+  if (lower.includes("stuck with it") || lower.includes("stick with it") || lower.includes("stuck with")) {
+    return {
+      keywords: ["continue", "persist", "not give up"],
+      chineseKeywords: ["坚持", "继续", "没有放弃", "做"],
+      suggestedChinese: "坚持做下去；没有放弃它",
+      definition: "Continued doing or supporting something despite difficulty, doubt or inconvenience. It is used when someone does not give up.",
+      range: "",
+      collocations: "",
+      warning: "",
+      examples: []
+    };
+  }
   if (lower.includes("specific inspiring story")) {
     return {
       keywords: ["specific", "inspiring", "story"],
