@@ -1600,8 +1600,14 @@ h3,
 
 .week-summary-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 12px;
+}
+
+.week-summary-row .welcome-kicker {
+  margin: 0;
 }
 
 .summary-toggle {
@@ -2486,6 +2492,17 @@ h3,
 
   .week-panel {
     padding: 16px 10px;
+  }
+
+  .week-summary-row {
+    gap: 8px;
+    padding: 0 6px;
+  }
+
+  .week-summary-row .welcome-kicker {
+    max-width: 46%;
+    font-size: 0.68rem;
+    line-height: 1.25;
   }
 
   .week-strip {

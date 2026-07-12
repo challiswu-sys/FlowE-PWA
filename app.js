@@ -1,7 +1,7 @@
 const STORAGE_KEY = "englishflow-state-v3";
 const LEGACY_STORAGE_KEY = "englishflow-state-v2";
 const DB_NAME = "englishflow-files-v1";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const BLOCKED_PUBLIC_MATERIAL_IDS = new Set(["xhs_6a25584d"]);
 
 let state = loadState();
@@ -11,6 +11,10 @@ let activeChunkId = state.chunks[0]?.id || null;
 let currentAnalysis = null;
 let latestFeedback = null;
 let activeAudioUrl = null;
+let activeVideoUrl = null;
+let activePosterUrl = null;
+let frequentCoverUrls = [];
+let frequentPreviewRenderId = 0;
 let segmentTimer = null;
 let recognition = null;
 let activeVoiceButton = null;
@@ -183,7 +187,9 @@ function bindForms() {
     event.preventDefault();
     const title = $("#materialTitle").value.trim();
     const source = $("#materialSource").value.trim();
+    const videoFile = $("#videoInput").files?.[0] || null;
     const audioFile = $("#audioInput").files?.[0] || null;
+    const coverFile = $("#coverInput").files?.[0] || null;
     const transcript = $("#transcriptText").value.trim();
 
     if (!title || !transcript) {
@@ -196,14 +202,22 @@ function bindForms() {
       id,
       title,
       source,
+      videoName: videoFile?.name || "",
+      videoType: videoFile?.type || "",
       audioName: audioFile?.name || "",
       audioType: audioFile?.type || "",
+      coverName: coverFile?.name || "",
+      coverType: coverFile?.type || "",
       createdAt: new Date().toISOString(),
       transcript,
       segments: segmentTranscript(transcript)
     };
 
-    if (audioFile) await putAudio(id, audioFile);
+    await Promise.all([
+      videoFile ? putFile("video", id, videoFile) : Promise.resolve(),
+      audioFile ? putFile("audio", id, audioFile) : Promise.resolve(),
+      coverFile ? putFile("cover", id, coverFile) : Promise.resolve()
+    ]);
 
     state.materials.unshift(material);
     activeMaterialId = id;
@@ -367,9 +381,12 @@ function renderHomeDashboard() {
   renderFrequentMaterials();
 }
 
-function renderFrequentMaterials() {
+async function renderFrequentMaterials() {
   const container = $("#frequentMaterialsPreview");
   if (!container) return;
+  const renderId = ++frequentPreviewRenderId;
+  frequentCoverUrls.forEach((url) => URL.revokeObjectURL(url));
+  frequentCoverUrls = [];
 
   const attemptCountByMaterial = new Map();
   state.attempts.forEach((attempt) => {
@@ -392,6 +409,8 @@ function renderFrequentMaterials() {
     }
     const poster = material.posterPath
       ? `<img src="${escapeAttribute(material.posterPath)}" alt="">`
+      : material.coverName
+        ? `<img data-local-cover="${escapeAttribute(material.id)}" alt="">`
       : `<span class="preview-letter">${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
     const mediaType = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
     return `
@@ -401,6 +420,17 @@ function renderFrequentMaterials() {
       </span>
     `;
   }).join("");
+
+  await Promise.all(materials.map(async (material) => {
+    if (!material.coverName || material.posterPath) return;
+    const blob = await getFile("cover", material.id);
+    if (!blob || renderId !== frequentPreviewRenderId) return;
+    const image = container.querySelector(`[data-local-cover="${CSS.escape(material.id)}"]`);
+    if (!image) return;
+    const url = URL.createObjectURL(blob);
+    frequentCoverUrls.push(url);
+    image.src = url;
+  }));
 }
 
 function renderPracticeInsights(container) {
@@ -738,7 +768,7 @@ function renderMaterials() {
   list.innerHTML = state.materials
     .map((material) => {
       const mediaLabel = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
-      const mediaTone = material.videoPath || material.audioName ? "green" : "amber";
+      const mediaTone = material.videoPath || material.videoName || material.audioName ? "green" : "amber";
       return `
         <article class="material-item ${material.id === activeMaterialId ? "is-active" : ""}">
           <div class="item-topline">
@@ -774,7 +804,11 @@ function renderMaterials() {
       state.chunks = state.chunks.map((chunk) =>
         chunk.sourceMaterialId === id ? { ...chunk, sourceMaterialId: "", sourceTitle: "Deleted material" } : chunk
       );
-      await deleteAudio(id);
+      await Promise.all([
+        deleteFile("audio", id),
+        deleteFile("video", id),
+        deleteFile("cover", id)
+      ]);
       activeMaterialId = state.materials[0]?.id || null;
       saveState();
       renderAll();
@@ -793,7 +827,7 @@ async function renderMaterialDetail() {
   const sourceLink = material.source
     ? `<a class="ghost-button" href="${escapeAttribute(material.source)}" target="_blank" rel="noreferrer">Source</a>`
     : "";
-  const videoBlock = material.videoPath
+  const videoBlock = material.videoPath || material.videoName
     ? `
       <video
         id="activeVideo"
@@ -801,10 +835,13 @@ async function renderMaterialDetail() {
         controls
         playsinline
         preload="metadata"
-        poster="${escapeAttribute(material.posterPath || "")}"
-        src="${escapeAttribute(material.videoPath)}"
+        ${material.posterPath ? `poster="${escapeAttribute(material.posterPath)}"` : ""}
+        ${material.videoPath ? `src="${escapeAttribute(material.videoPath)}"` : ""}
       ></video>
     `
+    : "";
+  const audioBlock = material.audioPath || material.audioName
+    ? `<audio id="activeAudio" class="audio-player" controls></audio>`
     : "";
   const transcriptRows = material.segments?.length
     ? material.segments
@@ -836,7 +873,7 @@ async function renderMaterialDetail() {
     </div>
 
     ${videoBlock}
-    <audio id="activeAudio" class="audio-player" controls></audio>
+    ${audioBlock}
 
     <div class="guided-flow">
       <div class="step-card">
@@ -892,17 +929,39 @@ async function renderMaterialDetail() {
     </div>
   `;
 
+  const video = $("#activeVideo");
   const audio = $("#activeAudio");
-  const audioBlob = material.audioPath ? null : await getAudio(material.id);
+  const [videoBlob, audioBlob, coverBlob] = await Promise.all([
+    material.videoPath ? null : getFile("video", material.id),
+    material.audioPath ? null : getFile("audio", material.id),
+    material.posterPath ? null : getFile("cover", material.id)
+  ]);
+  if (activeVideoUrl) URL.revokeObjectURL(activeVideoUrl);
   if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
-  if (material.audioPath) {
+  if (activePosterUrl) URL.revokeObjectURL(activePosterUrl);
+  activeVideoUrl = null;
+  activeAudioUrl = null;
+  activePosterUrl = null;
+
+  if (video && material.videoPath) {
+    video.src = material.videoPath;
+  } else if (video && videoBlob) {
+    activeVideoUrl = URL.createObjectURL(videoBlob);
+    video.src = activeVideoUrl;
+  }
+  if (video && coverBlob) {
+    activePosterUrl = URL.createObjectURL(coverBlob);
+    video.poster = activePosterUrl;
+  }
+
+  if (audio && material.audioPath) {
     audio.src = material.audioPath;
-  } else if (audioBlob) {
+  } else if (audio && audioBlob) {
     activeAudioUrl = URL.createObjectURL(audioBlob);
     audio.src = activeAudioUrl;
-  } else {
-    audio.removeAttribute("src");
-    audio.insertAdjacentHTML("afterend", `<p class="small-note">No audio is saved for this material. You can still practise with the transcript.</p>`);
+  } else if (!video) {
+    const workbenchHead = $(".workbench-head", container);
+    workbenchHead?.insertAdjacentHTML("afterend", `<p class="small-note">No playable media is saved for this material. You can still practise with the transcript.</p>`);
   }
 
   bindMaterialDetailEvents(material);
@@ -966,7 +1025,7 @@ function bindMaterialDetailEvents(material) {
     button.addEventListener("click", () => {
       const material = state.materials.find((item) => item.id === activeMaterialId);
       const segment = material?.segments?.[Number(button.dataset.playSegment)];
-      playSegment($("#activeAudio"), segment);
+      playSegment($("#activeAudio") || $("#activeVideo"), segment);
     });
   });
 }
@@ -1662,37 +1721,39 @@ function openDb() {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio");
+      if (!db.objectStoreNames.contains("video")) db.createObjectStore("video");
+      if (!db.objectStoreNames.contains("cover")) db.createObjectStore("cover");
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function putAudio(id, file) {
+async function putFile(storeName, id, file) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction("audio", "readwrite");
-    tx.objectStore("audio").put(file, id);
+    const tx = db.transaction(storeName, "readwrite");
+    tx.objectStore(storeName).put(file, id);
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
 }
 
-async function getAudio(id) {
+async function getFile(storeName, id) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction("audio", "readonly");
-    const request = tx.objectStore("audio").get(id);
+    const tx = db.transaction(storeName, "readonly");
+    const request = tx.objectStore(storeName).get(id);
     request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function deleteAudio(id) {
+async function deleteFile(storeName, id) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction("audio", "readwrite");
-    tx.objectStore("audio").delete(id);
+    const tx = db.transaction(storeName, "readwrite");
+    tx.objectStore(storeName).delete(id);
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
