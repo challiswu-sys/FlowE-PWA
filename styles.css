@@ -3438,3 +3438,229 @@ select {
     grid-template-columns: 54px minmax(0, 1fr);
   }
 }
+
+/* Meaning feedback and sentence collection */
+.meaning-feedback {
+  display: grid;
+  gap: 10px;
+}
+
+.meaning-feedback-head,
+.sentence-practice-head,
+.sentence-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meaning-feedback-head {
+  padding-bottom: 4px;
+}
+
+.meaning-feedback-head span:first-child {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.meaning-feedback-head h3,
+.sentence-practice-head h3,
+.sentence-practice-head p,
+.previous-sentences h3 {
+  margin: 0;
+}
+
+.meaning-feedback-head h3 {
+  margin-top: 3px;
+  font-size: 1.18rem;
+}
+
+.meaning-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.meaning-status.is-accurate {
+  color: #236b43;
+  background: rgba(198, 238, 214, 0.70);
+}
+
+.meaning-status.needs-correction {
+  color: #a43e48;
+  background: rgba(255, 216, 215, 0.72);
+}
+
+.meaning-status.needs-confirmation {
+  color: #7c5a00;
+  background: rgba(255, 236, 178, 0.72);
+}
+
+.meaning-feedback-row {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.50);
+}
+
+.meaning-feedback-row span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.meaning-feedback-row p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.english-supplement {
+  border-left: 3px solid rgba(79, 103, 216, 0.58);
+  background: rgba(231, 238, 255, 0.50);
+}
+
+.sentence-practice-head {
+  align-items: flex-start;
+}
+
+.sentence-practice-head p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.sentence-list-empty {
+  display: grid;
+  place-items: center;
+  min-height: 76px;
+  border: 1px dashed rgba(110, 107, 115, 0.24);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.sentence-entry-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sentence-entry {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.sentence-entry-head {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 36px;
+  align-items: start;
+}
+
+.sentence-entry-head > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--ink);
+  background: rgba(255, 210, 95, 0.78);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.sentence-entry-head p {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 720;
+  line-height: 1.45;
+}
+
+.sentence-entry-head .icon-button {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.sentence-result-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 11px;
+  border-radius: 7px;
+  background: rgba(242, 242, 244, 0.66);
+}
+
+.sentence-result-row strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+.sentence-result-row strong svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sentence-result-row p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.natural-version-row {
+  background: rgba(230, 237, 255, 0.66);
+}
+
+.natural-version-row strong {
+  color: #4359ba;
+}
+
+.sentence-composer {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 189, 63, 0.30);
+  border-radius: 8px;
+  background: rgba(255, 247, 220, 0.54);
+}
+
+.add-error-button {
+  justify-self: start;
+}
+
+.previous-sentences {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .meaning-feedback-head,
+  .sentence-practice-head {
+    align-items: flex-start;
+  }
+
+  .sentence-result-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .sentence-entry-head {
+    grid-template-columns: 26px minmax(0, 1fr) 34px;
+    gap: 8px;
+  }
+
+  .sentence-entry-head > span {
+    width: 26px;
+    height: 26px;
+  }
+}

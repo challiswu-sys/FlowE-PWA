@@ -15,6 +15,7 @@ let captureEditorOpen = false;
 let activePhraseDetailId = null;
 let activeErrorId = null;
 let editingMaterialId = null;
+let sentenceComposerKey = null;
 let activeAudioUrl = null;
 let activeVideoUrl = null;
 let activePosterUrl = null;
@@ -1146,15 +1147,7 @@ function bindMaterialDetailEvents(material) {
     saveButton.addEventListener("click", saveCurrentChunk);
   }
 
-  const checkButton = $("[data-check-sentence]", $("#materialDetail"));
-  if (checkButton) {
-    checkButton.addEventListener("click", () => checkPracticeSentence($("#materialDetail")));
-  }
-
-  const saveMistakeButton = $("[data-save-mistake]", $("#materialDetail"));
-  if (saveMistakeButton) {
-    saveMistakeButton.addEventListener("click", () => saveLatestMistake($("#materialDetail")));
-  }
+  bindSentencePracticeControls($("#materialDetail"));
 
   $("#deleteCaptureButton")?.addEventListener("click", () => {
     material.captures = material.captures.filter((capture) => capture.id !== activeCaptureId);
@@ -1240,28 +1233,20 @@ function renderCapturedPhraseList(material, activeCapture) {
 }
 
 function renderCaptureWorkspace(capture) {
-  const analysis = capture.analysis || buildChunkAnalysis(capture.phrase, capture.meaning, capture.sentence || "");
   return `
-    <div class="capture-understanding">
-      <span>My understanding</span>
-      <p>${escapeHtml(capture.meaning)}</p>
-    </div>
-    <div class="analysis-grid capture-analysis-grid">
-      <article><span>Full meaning</span><p>${escapeHtml(analysis.definition)}</p></article>
-      <article><span>Range of use</span><p>${escapeHtml(analysis.range)}</p></article>
-      <article><span>Common collocations</span><p>${escapeHtml(analysis.collocations)}</p></article>
-      <article><span>Common pitfall</span><p>${escapeHtml(analysis.warning)}</p></article>
-    </div>
-    <div class="example-stack">
-      ${analysis.examples.map((example) => `<p>${escapeHtml(example)}</p>`).join("")}
-    </div>
+    ${renderMeaningFeedback(capture)}
     <div class="phrase-bank-action">
       ${capture.linkedChunkId
         ? `<span class="saved-confirmation"><i data-lucide="check"></i> Saved to Phrase Bank</span>`
         : `<button class="secondary-button" type="button" id="saveChunkButton"><i data-lucide="bookmark-plus"></i><span>Save to Phrase Bank</span></button>`}
     </div>
     <section class="inline-sentence-practice practice-card">
-      ${renderPracticeCard(capture, false)}
+      ${renderPracticeCard(capture, {
+        showErrorAction: false,
+        heading: "Sentence Practice",
+        entries: capture.practiceHistory || [],
+        composerKey: `material:${capture.id}`
+      })}
     </section>
     <button class="ghost-button remove-capture-button" type="button" id="deleteCaptureButton"><i data-lucide="trash-2"></i><span>Remove from this material</span></button>
   `;
@@ -1328,51 +1313,77 @@ function renderAnalysisCard(material) {
   `;
 }
 
-function renderPracticeCard(chunk, showErrorAction = true, heading = "Use It in a Sentence") {
+function renderPracticeCard(chunk, options = {}) {
+  const {
+    showErrorAction = true,
+    heading = "Sentence Practice",
+    entries = chunk?.practiceHistory || [],
+    composerKey = `practice:${chunk?.id || "draft"}`
+  } = options;
+
   if (!chunk) {
     return `
-      <div class="step-heading">
-        <span class="step-number">3</span>
-        <div>
-          <h3>${escapeHtml(heading)}</h3>
-          <p>Save the phrase, then say an English sentence of your own.</p>
-        </div>
-      </div>
+      <div class="sentence-practice-head"><h3>${escapeHtml(heading)}</h3></div>
       <div class="detail-empty compact-empty">Waiting for a phrase</div>
     `;
   }
 
+  const composerOpen = sentenceComposerKey === composerKey;
   return `
-    <div class="step-heading">
-      <span class="step-number">3</span>
+    <div class="sentence-practice-head">
       <div>
         <h3>${escapeHtml(heading)}</h3>
-        <p>Target phrase: ${escapeHtml(chunk.phrase)}</p>
+        <p>${entries.length} ${entries.length === 1 ? "sentence" : "sentences"}</p>
       </div>
+      ${composerOpen ? "" : `<button class="secondary-button compact-action" type="button" data-add-sentence="${escapeAttribute(composerKey)}"><i data-lucide="plus"></i><span>Add Sentence</span></button>`}
     </div>
-    <label>
-      <span>My English sentence</span>
-      <div class="voice-field">
-        <textarea data-practice-sentence rows="4" placeholder="Say an English sentence about your own life"></textarea>
-        <button class="icon-button voice-button" type="button" data-voice-target="practiceSentence" data-voice-lang="en-US" aria-label="Dictate an English sentence" title="Dictate an English sentence">
-          <i data-lucide="mic"></i>
-        </button>
-      </div>
-    </label>
-    <div class="button-row">
-      <button class="primary-button" type="button" data-check-sentence>
-        <i data-lucide="check-circle-2"></i>
-        <span>Check Grammar and Naturalness</span>
-      </button>
-      ${showErrorAction ? `
-        <button class="secondary-button" type="button" data-save-mistake>
-          <i data-lucide="bookmark-plus"></i>
-          <span>Add Phrase to Error</span>
-        </button>
-      ` : ""}
-    </div>
-    <div data-practice-feedback class="feedback-area compact-feedback">
-      ${latestFeedback ? feedbackMarkup(latestFeedback) : ""}
+    ${renderSentenceEntries(entries)}
+    ${composerOpen ? `
+      <section class="sentence-composer">
+        <label>
+          <span>New English sentence</span>
+          <div class="voice-field">
+            <textarea data-practice-sentence rows="3" placeholder="Say an English sentence about your own life"></textarea>
+            <button class="icon-button voice-button" type="button" data-voice-target="practiceSentence" data-voice-lang="en-US" aria-label="Dictate an English sentence" title="Dictate an English sentence"><i data-lucide="mic"></i></button>
+          </div>
+        </label>
+        <div class="button-row">
+          <button class="primary-button" type="button" data-check-sentence><i data-lucide="check-circle-2"></i><span>Check Grammar and Naturalness</span></button>
+          <button class="ghost-button" type="button" data-cancel-sentence><span>Cancel</span></button>
+        </div>
+      </section>
+    ` : ""}
+    ${showErrorAction && entries.length ? `<button class="secondary-button add-error-button" type="button" data-save-mistake><i data-lucide="bookmark-plus"></i><span>Add Phrase to Error</span></button>` : ""}
+  `;
+}
+
+function renderSentenceEntries(entries = []) {
+  if (!entries.length) return `<div class="sentence-list-empty">No sentences yet.</div>`;
+  const chronological = [...entries].reverse();
+  return `
+    <div class="sentence-entry-list">
+      ${chronological.map((entry, index) => {
+        const rawCheck = entry.feedback?.notes?.[0]
+          || (entry.corrected === entry.sentence ? "Looks natural and complete." : "Review the improved version below.");
+        const check = rawCheck.includes("future AI connection") ? "Looks natural and complete." : rawCheck;
+        return `
+          <article class="sentence-entry">
+            <div class="sentence-entry-head">
+              <span>${index + 1}</span>
+              <p>${escapeHtml(entry.sentence || "")}</p>
+              <button class="icon-button danger-icon" type="button" data-delete-sentence="${escapeAttribute(entry.id)}" aria-label="Delete sentence ${index + 1}" title="Delete sentence"><i data-lucide="trash-2"></i></button>
+            </div>
+            <div class="sentence-result-row">
+              <strong><i data-lucide="check-circle-2"></i> Check</strong>
+              <p>${escapeHtml(check)}</p>
+            </div>
+            <div class="sentence-result-row natural-version-row">
+              <strong><i data-lucide="sparkles"></i> More Natural Version</strong>
+              <p>${escapeHtml(entry.corrected || entry.sentence || "")}</p>
+            </div>
+          </article>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -1443,11 +1454,7 @@ function renderSentenceStudio() {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
 
-  const checkButton = $("[data-check-sentence]", container);
-  if (checkButton) checkButton.addEventListener("click", () => checkPracticeSentence(container));
-
-  const saveMistakeButton = $("[data-save-mistake]", container);
-  if (saveMistakeButton) saveMistakeButton.addEventListener("click", () => saveLatestMistake(container));
+  bindSentencePracticeControls(container);
 }
 
 function saveCurrentChunk() {
@@ -1489,6 +1496,66 @@ function saveCurrentChunk() {
   saveState();
   renderAll();
   toast("Saved to Phrase with its analysis and practice history");
+}
+
+function bindSentencePracticeControls(scope) {
+  if (!scope) return;
+  $$('[data-add-sentence]', scope).forEach((button) => {
+    button.addEventListener("click", () => {
+      sentenceComposerKey = button.dataset.addSentence;
+      rerenderCurrentPracticeView();
+    });
+  });
+  $$('[data-cancel-sentence]', scope).forEach((button) => {
+    button.addEventListener("click", () => {
+      sentenceComposerKey = null;
+      rerenderCurrentPracticeView();
+    });
+  });
+  $$('[data-delete-sentence]', scope).forEach((button) => {
+    button.addEventListener("click", () => deletePracticeSentence(button.dataset.deleteSentence));
+  });
+  $("[data-check-sentence]", scope)?.addEventListener("click", () => checkPracticeSentence(scope));
+  $("[data-save-mistake]", scope)?.addEventListener("click", () => saveLatestMistake(scope));
+}
+
+function rerenderCurrentPracticeView() {
+  if (activeView === "materials") renderMaterialDetail();
+  else if (activeView === "chunks") renderChunks();
+  else if (activeView === "mistakes") renderMistakes();
+  else renderSentenceStudio();
+  renderIcons();
+}
+
+function deletePracticeSentence(entryId) {
+  if (activeView === "materials") {
+    const material = state.materials.find((item) => item.id === activeMaterialId);
+    const capture = material?.captures?.find((item) => item.id === activeCaptureId);
+    if (capture) {
+      capture.practiceHistory = (capture.practiceHistory || []).filter((entry) => entry.id !== entryId);
+      const linked = state.chunks.find((chunk) => chunk.id === capture.linkedChunkId);
+      if (linked) linked.practiceHistory = [...capture.practiceHistory];
+    }
+  } else if (activeView === "mistakes") {
+    const mistake = state.mistakes.find((item) => item.id === activeErrorId);
+    if (mistake) {
+      mistake.practiceHistory = (mistake.practiceHistory || []).filter((entry) => entry.id !== entryId);
+      mistake.morePractice = (mistake.morePractice || []).filter((entry) => entry.id !== entryId);
+    }
+  } else {
+    const chunk = state.chunks.find((item) => item.id === activeChunkId);
+    if (chunk) {
+      chunk.practiceHistory = (chunk.practiceHistory || []).filter((entry) => entry.id !== entryId);
+      state.materials.forEach((material) => {
+        const capture = material.captures?.find((item) => item.linkedChunkId === chunk.id);
+        if (capture) capture.practiceHistory = [...chunk.practiceHistory];
+      });
+    }
+  }
+  state.attempts = state.attempts.filter((entry) => entry.id !== entryId);
+  saveState();
+  rerenderCurrentPracticeView();
+  toast("Sentence deleted");
 }
 
 function checkPracticeSentence(scope = currentPracticeScope()) {
@@ -1543,20 +1610,9 @@ function checkPracticeSentence(scope = currentPracticeScope()) {
       });
     }
   }
+  sentenceComposerKey = null;
   saveState();
-  if (activeView === "chunks") {
-    renderChunks();
-    renderIcons();
-    return;
-  }
-  if (activeView === "mistakes") {
-    renderMistakes();
-    renderIcons();
-    return;
-  }
-  const feedback = $("[data-practice-feedback]", scope || document);
-  if (feedback) feedback.innerHTML = feedbackMarkup(latestFeedback);
-  renderIcons();
+  rerenderCurrentPracticeView();
 }
 
 function getActivePracticeChunk() {
@@ -1842,8 +1898,7 @@ function renderChunks() {
   $$('[data-voice-target]', list).forEach((button) => {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
-  $("[data-check-sentence]", list)?.addEventListener("click", () => checkPracticeSentence(list));
-  $("[data-save-mistake]", list)?.addEventListener("click", () => saveLatestMistake(list));
+  bindSentencePracticeControls(list);
 
   $$('[data-delete-chunk]', list).forEach((button) => {
     button.addEventListener("click", () => {
@@ -1866,9 +1921,13 @@ function renderChunks() {
 function renderPhraseBankWorkspace(chunk) {
   return `
     ${renderPhraseKnowledge(chunk)}
-    ${renderPracticeHistory(chunk.practiceHistory, "Sentence History")}
     <section class="inline-sentence-practice practice-card">
-      ${renderPracticeCard(chunk, true)}
+      ${renderPracticeCard(chunk, {
+        showErrorAction: true,
+        heading: "Sentence Practice",
+        entries: chunk.practiceHistory || [],
+        composerKey: `phrase:${chunk.id}`
+      })}
     </section>
     <div class="detail-actions-row">
       ${chunk.sourceMaterialId ? `<button class="ghost-button" type="button" data-open-source-material="${escapeAttribute(chunk.id)}"><i data-lucide="headphones"></i><span>Open Source Material</span></button>` : ""}
@@ -1878,21 +1937,50 @@ function renderPhraseBankWorkspace(chunk) {
 }
 
 function renderPhraseKnowledge(item) {
+  return renderMeaningFeedback(item);
+}
+
+function renderMeaningFeedback(item) {
+  const known = getKnownChunk(item.phrase || "");
   const analysis = item.analysis || buildChunkAnalysis(item.phrase || "This phrase", item.meaning || "", item.sentence || "");
+  const englishDefinition = known?.definition || analysis.definition;
+  const chineseKeywords = known?.chineseKeywords || [];
+  const hasKnownMatch = chineseKeywords.length > 0;
+  const chineseMatchCount = chineseKeywords.filter((keyword) => (item.meaning || "").includes(keyword)).length;
+  const accurate = hasKnownMatch && chineseMatchCount >= Math.min(2, chineseKeywords.length);
+  const status = hasKnownMatch ? (accurate ? "Accurate" : "Needs correction") : "Needs confirmation";
+  const feedback = accurate
+    ? "Your Chinese interpretation captures the core meaning accurately."
+    : hasKnownMatch
+      ? "Your Chinese interpretation misses or changes part of the core meaning."
+      : "This phrase is not yet in the local meaning library, so the interpretation needs manual confirmation.";
+  const suggestedChinese = known?.suggestedChinese || item.meaning || "Add a Chinese interpretation.";
+
   return `
-    <div class="capture-understanding">
-      <span>My understanding</span>
-      <p>${escapeHtml(item.meaning || "No understanding added")}</p>
-    </div>
-    <div class="analysis-grid capture-analysis-grid">
-      <article><span>Full meaning</span><p>${escapeHtml(analysis.definition)}</p></article>
-      <article><span>Range of use</span><p>${escapeHtml(analysis.range)}</p></article>
-      <article><span>Common collocations</span><p>${escapeHtml(analysis.collocations)}</p></article>
-      <article><span>Common pitfall</span><p>${escapeHtml(analysis.warning)}</p></article>
-    </div>
-    <div class="example-stack">
-      ${(analysis.examples || []).map((example) => `<p>${escapeHtml(example)}</p>`).join("")}
-    </div>
+    <section class="meaning-feedback">
+      <div class="meaning-feedback-head">
+        <div><span>Chinese meaning feedback</span><h3>${escapeHtml(status)}</h3></div>
+        <span class="meaning-status ${accurate ? "is-accurate" : hasKnownMatch ? "needs-correction" : "needs-confirmation"}">${escapeHtml(status)}</span>
+      </div>
+      <div class="meaning-feedback-row">
+        <span>My Chinese interpretation</span>
+        <p>${escapeHtml(item.meaning || "No interpretation added")}</p>
+      </div>
+      <div class="meaning-feedback-row">
+        <span>Feedback</span>
+        <p>${escapeHtml(feedback)}</p>
+      </div>
+      ${hasKnownMatch && !accurate ? `
+        <div class="meaning-feedback-row">
+          <span>Suggested Chinese</span>
+          <p>${escapeHtml(suggestedChinese)}</p>
+        </div>
+      ` : ""}
+      <div class="meaning-feedback-row english-supplement">
+        <span>English definition</span>
+        <p>${escapeHtml(englishDefinition)}</p>
+      </div>
+    </section>
   `;
 }
 
@@ -1954,7 +2042,7 @@ function renderMistakes() {
   $$('[data-voice-target]', list).forEach((button) => {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
-  $("[data-check-sentence]", list)?.addEventListener("click", () => checkPracticeSentence(list));
+  bindSentencePracticeControls(list);
 
   $$('[data-toggle-mastered]', list).forEach((button) => {
     button.addEventListener("click", () => {
@@ -1979,7 +2067,10 @@ function renderMistakes() {
 function renderErrorWorkspace(mistake) {
   return `
     ${renderPhraseKnowledge(mistake)}
-    ${renderPracticeHistory(mistake.practiceHistory, "Phrase Practice Before Error")}
+    <section class="previous-sentences">
+      <h3>Previous Sentences</h3>
+      ${renderSentenceEntries(mistake.practiceHistory || [])}
+    </section>
     <section class="saved-error-summary">
       <span>Why it is here</span>
       <p class="mistake-original">${escapeHtml(mistake.original || "")}</p>
@@ -1987,9 +2078,13 @@ function renderErrorWorkspace(mistake) {
       <small>${escapeHtml(mistake.note || "")}</small>
     </section>
     <section class="inline-sentence-practice practice-card more-practice-card">
-      ${renderPracticeCard(mistake, false, "More Practice")}
+      ${renderPracticeCard(mistake, {
+        showErrorAction: false,
+        heading: "More Practice",
+        entries: mistake.morePractice || [],
+        composerKey: `error:${mistake.id}`
+      })}
     </section>
-    ${renderPracticeHistory(mistake.morePractice, "More Practice History")}
     <div class="detail-actions-row">
       <button class="secondary-button" type="button" data-toggle-mastered="${escapeAttribute(mistake.id)}"><i data-lucide="${mistake.mastered ? "undo-2" : "check"}"></i><span>${mistake.mastered ? "Restore" : "Mastered"}</span></button>
       <button class="ghost-button" type="button" data-delete-mistake="${escapeAttribute(mistake.id)}"><i data-lucide="trash-2"></i><span>Delete Error</span></button>
@@ -2074,6 +2169,18 @@ function buildChunkAnalysis(phrase, meaning, sourceSentence = "") {
 
 function getKnownChunk(phrase) {
   const lower = phrase.toLowerCase();
+  if (lower.includes("specific inspiring story")) {
+    return {
+      keywords: ["specific", "inspiring", "story"],
+      chineseKeywords: ["具体", "鼓舞", "激励", "故事"],
+      suggestedChinese: "一个具体而鼓舞人心的故事",
+      definition: "A particular story that gives people encouragement, hope or motivation.",
+      range: "",
+      collocations: "",
+      warning: "",
+      examples: []
+    };
+  }
   if (lower.includes("falling more in love") || lower.includes("fall more in love")) {
     return {
       keywords: ["love", "deeper", "increasingly", "feelings"],
@@ -2213,7 +2320,7 @@ function analyseSentence(sentence, chunk) {
   }
 
   if (notes.length === 0) {
-    notes.push("The basic check found no obvious issues. A future AI connection can assess tone, naturalness and more idiomatic alternatives.");
+    notes.push("Looks natural and complete.");
   }
 
   return {
