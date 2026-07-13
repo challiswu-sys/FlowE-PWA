@@ -12,6 +12,8 @@ let currentAnalysis = null;
 let latestFeedback = null;
 let activeCaptureId = null;
 let captureEditorOpen = false;
+let materialDetailOpen = false;
+let materialsEditMode = false;
 let activePhraseDetailId = null;
 let activeErrorId = null;
 let editingMaterialId = null;
@@ -186,7 +188,7 @@ function buildDemoPreviewState() {
         videoType: "video/mp4",
         audioName: "demo-audio.mp3",
         audioType: "audio/mpeg",
-        coverName: "demo-cover.jpg",
+        coverName: "",
         transcriptName: "demo-subtitles.srt",
         transcript: "I stuck with it because I wanted to finish what I started.\nHe wanted a specific inspiring story, not a vague answer.",
         segments: [
@@ -217,10 +219,81 @@ function buildDemoPreviewState() {
         ],
         createdAt: now,
         updatedAt: now
+      },
+      {
+        id: "demo_material_2",
+        title: "How to Sound Natural in English",
+        source: "",
+        videoName: "natural-english.mp4",
+        videoType: "video/mp4",
+        audioName: "",
+        audioType: "",
+        coverName: "",
+        transcriptName: "natural-english.srt",
+        transcript: "Natural English is built from phrases, not isolated words.",
+        segments: [
+          { start: 0, end: 5, text: "Natural English is built from phrases, not isolated words." }
+        ],
+        captures: [
+          {
+            id: "demo_capture_natural",
+            phrase: "Sound natural",
+            meaning: "听起来自然",
+            sentence: "This expression helps the sentence sound natural.",
+            linkedChunkId: "",
+            practiceHistory: [],
+            createdAt: now
+          }
+        ],
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 86400000).toISOString()
+      },
+      {
+        id: "demo_material_3",
+        title: "Late Night: The Perfect Answer",
+        source: "",
+        videoName: "late-night.mp4",
+        videoType: "video/mp4",
+        audioName: "",
+        audioType: "",
+        coverName: "",
+        transcriptName: "late-night.srt",
+        transcript: "That was the perfect answer for the moment.",
+        segments: [
+          { start: 0, end: 4, text: "That was the perfect answer for the moment." }
+        ],
+        captures: [
+          {
+            id: "demo_capture_answer",
+            phrase: "The perfect answer",
+            meaning: "恰到好处的回答",
+            sentence: "That was the perfect answer for the moment.",
+            linkedChunkId: "",
+            practiceHistory: [],
+            createdAt: now
+          }
+        ],
+        createdAt: new Date(Date.now() - 172800000).toISOString(),
+        updatedAt: new Date(Date.now() - 172800000).toISOString()
       }
     ],
     chunks: [stuckChunk, storyChunk],
-    mistakes: [],
+    mistakes: [
+      {
+        id: "demo_error_1",
+        sourceChunkId: stuckChunk.id,
+        sourceMaterialId: materialId,
+        phrase: stuckChunk.phrase,
+        meaning: stuckChunk.meaning,
+        sentence: "I stuck with it even when the topic was hard",
+        category: "Grammar",
+        analysis: stuckChunk.analysis,
+        practiceHistory: [...stuckChunk.practiceHistory],
+        morePractice: [],
+        mastered: false,
+        createdAt: now
+      }
+    ],
     attempts: [...stuckChunk.practiceHistory],
     practiceLog: {
       [dateKey(new Date())]: 42
@@ -350,6 +423,9 @@ function resetViewState(view) {
     activeCaptureId = null;
     captureEditorOpen = false;
     currentAnalysis = null;
+    materialDetailOpen = false;
+    materialsEditMode = false;
+    closeMaterialEditor();
   }
   if (view === "chunks") {
     activePhraseDetailId = null;
@@ -441,6 +517,7 @@ function openMaterialEditor(material = null) {
   if (!editor || !form) return;
 
   editingMaterialId = material?.id || null;
+  materialDetailOpen = false;
   form.reset();
   $("#materialTitle").value = material?.title || "";
   $("#materialSource").value = material?.source || "";
@@ -490,8 +567,22 @@ function bindActions() {
     });
   });
 
-  $("#manageAddMaterialButton")?.addEventListener("click", () => openMaterialEditor());
   $("#cancelMaterialEditButton")?.addEventListener("click", closeMaterialEditor);
+  $("#materialsEditToggle")?.addEventListener("click", () => {
+    materialsEditMode = !materialsEditMode;
+    closeMaterialEditor();
+    renderMaterials();
+    renderIcons();
+  });
+  $("#materialsBackButton")?.addEventListener("click", () => {
+    materialDetailOpen = false;
+    activeCaptureId = null;
+    captureEditorOpen = false;
+    currentAnalysis = null;
+    latestFeedback = null;
+    renderMaterials();
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+  });
 
   $("#practiceSummaryToggle")?.addEventListener("click", () => {
     practiceSummaryOpen = !practiceSummaryOpen;
@@ -643,27 +734,25 @@ async function renderFrequentMaterials() {
     .sort((a, b) => {
       const usageDifference = (attemptCountByMaterial.get(b.id) || 0) - (attemptCountByMaterial.get(a.id) || 0);
       return usageDifference || new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-    })
-    .slice(0, 3);
+    });
 
-  container.innerHTML = Array.from({ length: 3 }, (_, index) => {
-    const material = materials[index];
-    if (!material) {
-      return `<span class="material-preview placeholder-${index + 1}" aria-hidden="true"><span class="preview-number">0${index + 1}</span></span>`;
-    }
+  container.innerHTML = materials.map((material, index) => {
     const poster = material.posterPath
       ? `<img src="${escapeAttribute(material.posterPath)}" alt="">`
       : material.coverName
         ? `<img data-local-cover="${escapeAttribute(material.id)}" alt="">`
       : `<span class="preview-letter">${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
-    const mediaType = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
     return `
-      <span class="material-preview material-tone-${index + 1}">
-        ${poster}
-        <span class="preview-caption"><small>${mediaType}</small><strong>${escapeHtml(material.title)}</strong></span>
-      </span>
+      <button class="home-material-tile" type="button" data-home-material="${escapeAttribute(material.id)}" aria-label="Open ${escapeAttribute(material.title)}">
+        <span class="home-material-cover material-tone-${(index % 3) + 1}">${poster}</span>
+        <span class="home-material-title">${escapeHtml(material.title)}</span>
+      </button>
     `;
-  }).join("");
+  }).join("") + `
+    <button class="home-material-tile home-add-material" type="button" id="homeAddMaterialButton" aria-label="Add material" title="Add material">
+      <span class="home-material-cover"><i data-lucide="plus"></i></span>
+    </button>
+  `;
 
   await Promise.all(materials.map(async (material) => {
     if (!material.coverName || material.posterPath) return;
@@ -675,6 +764,26 @@ async function renderFrequentMaterials() {
     frequentCoverUrls.push(url);
     image.src = url;
   }));
+
+  $$('[data-home-material]', container).forEach((button) => {
+    button.addEventListener("click", () => {
+      activeMaterialId = button.dataset.homeMaterial;
+      activeCaptureId = null;
+      captureEditorOpen = false;
+      materialDetailOpen = true;
+      materialsEditMode = false;
+      currentAnalysis = null;
+      latestFeedback = null;
+      switchView("materials", { scrollTop: true });
+    });
+  });
+
+  $("#homeAddMaterialButton", container)?.addEventListener("click", () => {
+    switchView("materials", { resetDetail: true, scrollTop: true });
+    window.requestAnimationFrame(() => openMaterialEditor());
+  });
+
+  renderIcons();
 }
 
 function renderPracticeInsights(container) {
@@ -997,9 +1106,31 @@ function renderIcons() {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function renderPreservingScroll(renderAction) {
-  const scrollTop = window.scrollY;
-  const restore = () => window.scrollTo({ top: scrollTop, left: 0, behavior: "auto" });
+function renderPreservingScroll(renderAction, anchorSelector = "") {
+  const scrollingElement = document.scrollingElement || document.documentElement;
+  const scrollTop = Math.max(
+    window.scrollY || 0,
+    scrollingElement?.scrollTop || 0,
+    document.body?.scrollTop || 0
+  );
+  const anchorTop = anchorSelector
+    ? $(anchorSelector)?.getBoundingClientRect().top ?? null
+    : null;
+
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+
+  const restore = () => {
+    const nextAnchor = anchorSelector ? $(anchorSelector) : null;
+    if (nextAnchor && anchorTop != null) {
+      const offset = nextAnchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(offset) > 0.5) window.scrollBy(0, offset);
+      return;
+    }
+    if (scrollingElement) scrollingElement.scrollTop = scrollTop;
+    window.scrollTo(0, scrollTop);
+  };
   const result = renderAction();
   restore();
   window.requestAnimationFrame(() => {
@@ -1007,48 +1138,72 @@ function renderPreservingScroll(renderAction) {
     window.requestAnimationFrame(restore);
   });
   if (result?.then) {
-    result.finally(() => window.requestAnimationFrame(restore));
+    result.finally(() => {
+      window.requestAnimationFrame(restore);
+      window.setTimeout(restore, 80);
+    });
   }
   return result;
 }
 
 function renderMaterials() {
   const list = $("#materialsList");
+  const gallery = $("#materialsGallery");
+  const detailShell = $("#materialDetailShell");
+  const editToggle = $("#materialsEditToggle");
+  const backButton = $("#materialsBackButton");
+  if (!list || !gallery || !detailShell || !editToggle || !backButton) return;
+
+  if (state.materials.length && (!activeMaterialId || !state.materials.some((item) => item.id === activeMaterialId))) {
+    activeMaterialId = state.materials[0].id;
+  }
   if (!state.materials.length) {
-    list.innerHTML = `<div class="detail-empty compact-empty">No materials yet</div>`;
-    $("#materialDetail").innerHTML = `<div class="detail-empty">Import a material to begin</div>`;
+    activeMaterialId = null;
+    materialDetailOpen = false;
+  }
+
+  gallery.hidden = materialDetailOpen;
+  detailShell.hidden = !materialDetailOpen;
+  editToggle.hidden = materialDetailOpen;
+  backButton.hidden = !materialDetailOpen;
+  editToggle.classList.toggle("is-active", materialsEditMode);
+  editToggle.setAttribute("aria-pressed", String(materialsEditMode));
+  editToggle.setAttribute("aria-label", materialsEditMode ? "Finish editing materials" : "Edit materials");
+  editToggle.setAttribute("title", materialsEditMode ? "Finish editing" : "Edit materials");
+  editToggle.innerHTML = `<i data-lucide="${materialsEditMode ? "check" : "pencil"}"></i>`;
+
+  if (materialDetailOpen) {
+    renderMaterialDetail();
     return;
   }
 
-  if (!activeMaterialId || !state.materials.some((item) => item.id === activeMaterialId)) {
-    activeMaterialId = state.materials[0].id;
-  }
-
   list.innerHTML = state.materials
-    .map((material) => {
-      const mediaLabel = material.videoPath || material.videoName ? "Video" : material.audioName ? "Audio" : "Text";
+    .map((material, index) => {
       const cover = material.posterPath
         ? `<img src="${escapeAttribute(material.posterPath)}" alt="">`
         : material.coverName
           ? `<img data-material-list-cover="${escapeAttribute(material.id)}" alt="">`
-          : `<span>${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
+          : `<span class="preview-letter">${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
       return `
-        <article class="material-item ${material.id === activeMaterialId ? "is-active" : ""}">
-          <button class="material-item-main" type="button" data-select-material="${material.id}" aria-label="Open ${escapeAttribute(material.title)}">
-            <span class="material-list-cover">${cover}</span>
-            <div class="material-item-copy">
-              <h3>${escapeHtml(material.title)}</h3>
-              <p>${mediaLabel} · ${material.captures?.length || 0} phrases · ${material.segments?.length || 0} lines</p>
-            </div>
+        <article class="home-material-tile material-library-tile">
+          <button class="material-library-open" type="button" data-select-material="${escapeAttribute(material.id)}" aria-label="Open ${escapeAttribute(material.title)}">
+            <span class="home-material-cover material-tone-${(index % 3) + 1}">${cover}</span>
+            <span class="home-material-title">${escapeHtml(material.title)}</span>
           </button>
-          <div class="material-row-actions">
-            <button class="icon-button" type="button" data-edit-material="${material.id}" aria-label="Edit ${escapeAttribute(material.title)}" title="Edit material"><i data-lucide="pencil"></i></button>
-            <button class="icon-button danger-icon" type="button" data-delete-material="${material.id}" aria-label="Delete ${escapeAttribute(material.title)}" title="Delete material"><i data-lucide="trash-2"></i></button>
-          </div>
+          ${materialsEditMode ? `
+            <div class="material-tile-actions">
+              <button class="icon-button" type="button" data-edit-material="${escapeAttribute(material.id)}" aria-label="Edit ${escapeAttribute(material.title)}" title="Edit material"><i data-lucide="pencil"></i></button>
+              <button class="icon-button danger-icon" type="button" data-delete-material="${escapeAttribute(material.id)}" aria-label="Delete ${escapeAttribute(material.title)}" title="Delete material"><i data-lucide="trash-2"></i></button>
+            </div>
+          ` : ""}
         </article>
       `;
     })
-    .join("");
+    .join("") + `
+      <button class="home-material-tile home-add-material materials-add-tile" type="button" id="materialsAddTile" aria-label="Add material" title="Add material">
+        <span class="home-material-cover"><i data-lucide="plus"></i></span>
+      </button>
+    `;
 
   loadMaterialListCovers(list, state.materials);
 
@@ -1057,11 +1212,17 @@ function renderMaterials() {
       activeMaterialId = button.dataset.selectMaterial;
       activeCaptureId = null;
       captureEditorOpen = false;
+      materialDetailOpen = true;
+      materialsEditMode = false;
       currentAnalysis = null;
       latestFeedback = null;
-      renderPreservingScroll(() => renderAll());
+      closeMaterialEditor();
+      renderMaterials();
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
     });
   });
+
+  $("#materialsAddTile", list)?.addEventListener("click", () => openMaterialEditor());
 
   $$("[data-edit-material]", list).forEach((button) => {
     button.addEventListener("click", () => {
@@ -1087,12 +1248,15 @@ function renderMaterials() {
       activeMaterialId = state.materials[0]?.id || null;
       activeCaptureId = null;
       saveState();
-      renderAll();
+      renderMaterials();
+      renderHomeDashboard();
+      renderStats();
+      renderIcons();
       toast("Material deleted");
     });
   });
 
-  renderMaterialDetail();
+  renderIcons();
 }
 
 async function loadMaterialListCovers(container, materials) {
@@ -1304,15 +1468,17 @@ function bindMaterialDetailEvents(material) {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
 
-  $("#addPhraseButton")?.addEventListener("click", () => {
+  $("#addPhraseButton")?.addEventListener("click", (event) => {
+    event.preventDefault();
     captureEditorOpen = true;
     activeCaptureId = null;
-    renderPreservingScroll(() => renderMaterialDetail());
+    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
   });
 
-  $("#cancelCaptureButton")?.addEventListener("click", () => {
+  $("#cancelCaptureButton")?.addEventListener("click", (event) => {
+    event.preventDefault();
     captureEditorOpen = false;
-    renderPreservingScroll(() => renderMaterialDetail());
+    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
   });
 
   $$('[data-open-capture]', $("#materialDetail")).forEach((button) => {
@@ -1320,7 +1486,7 @@ function bindMaterialDetailEvents(material) {
       const nextId = button.dataset.openCapture;
       activeCaptureId = activeCaptureId === nextId ? null : nextId;
       captureEditorOpen = false;
-      renderPreservingScroll(() => renderMaterialDetail());
+      renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
     });
   });
 
@@ -1350,7 +1516,7 @@ function bindMaterialDetailEvents(material) {
     activeChunkId = "";
     latestFeedback = null;
     saveState();
-    renderPreservingScroll(() => renderMaterialDetail());
+    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
     toast("Phrase added to this material");
   });
 
@@ -1367,7 +1533,7 @@ function bindMaterialDetailEvents(material) {
     currentAnalysis = null;
     latestFeedback = null;
     saveState();
-    renderPreservingScroll(() => renderMaterialDetail());
+    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
     toast("Phrase removed from this material");
   });
 
@@ -1706,7 +1872,7 @@ function saveCurrentChunk() {
   activeChunkId = chunk.id;
   activePhraseDetailId = chunk.id;
   saveState();
-  renderPreservingScroll(() => renderAll());
+  renderPreservingScroll(() => renderAll(), ".material-phrases");
   toast("Saved to Phrase with its analysis and practice history");
 }
 
@@ -1732,13 +1898,14 @@ function bindSentencePracticeControls(scope) {
 }
 
 function rerenderCurrentPracticeView() {
+  const anchorSelector = activeView === "materials" ? ".material-phrases" : "";
   renderPreservingScroll(() => {
     if (activeView === "materials") renderMaterialDetail();
     else if (activeView === "chunks") renderChunks();
     else if (activeView === "mistakes") renderMistakes();
     else renderSentenceStudio();
     renderIcons();
-  });
+  }, anchorSelector);
 }
 
 function deletePracticeSentence(entryId) {

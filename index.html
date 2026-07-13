@@ -12,9 +12,9 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
     <link rel="icon" href="./assets/icon-192.png" sizes="192x192" type="image/png">
-    <link rel="stylesheet" href="./styles.css?v=material-subtitles-12">
+    <link rel="stylesheet" href="./styles.css?v=materials-gallery-17">
     <script defer src="./assets/lucide.min.js"></script>
-    <script defer src="./app.js?v=material-subtitles-12"></script>
+    <script defer src="./app.js?v=materials-gallery-17"></script>
   </head>
   <body>
     <div class="shell">
@@ -64,82 +64,29 @@
 
           <section class="journey-section" aria-labelledby="journeyTitle">
             <div class="section-heading-row">
-              <div>
-                <h2 id="journeyTitle">My Materials</h2>
-              </div>
-              <div class="materials-heading-actions">
-                <button class="add-material-button" id="addMaterialButton" type="button" data-nav="materials">
-                  <i data-lucide="plus"></i>
-                  <span>Add Materials</span>
-                </button>
-                <button class="text-button" type="button" data-nav="materials">See all <i data-lucide="arrow-up-right"></i></button>
-              </div>
+              <h2 id="journeyTitle">My Materials</h2>
             </div>
-            <button class="journey-card cover-only" type="button" data-nav="materials">
-              <span class="material-preview-grid" id="frequentMaterialsPreview" aria-label="Frequently used materials">
-                <span class="material-preview placeholder-one"></span>
-                <span class="material-preview placeholder-two"></span>
-                <span class="material-preview placeholder-three"></span>
-              </span>
-            </button>
-          </section>
-
-          <section class="quick-section" aria-labelledby="quickTitle">
-            <div class="section-heading-row">
-              <div>
-                <h2 id="quickTitle">Keep Practising</h2>
-              </div>
-            </div>
-            <div class="quick-grid">
-              <button class="quick-card quick-chunks" type="button" data-nav="chunks">
-                <span class="quick-icon"><i data-lucide="blocks"></i></span>
-                <strong>Phrase Bank</strong>
-                <span>Learn words as natural combinations</span>
-                <small><b id="homeChunkCountCard">0</b> phrases</small>
-              </button>
-              <button class="quick-card quick-sentence" type="button" data-nav="sentences">
-                <span class="quick-icon"><i data-lucide="message-circle-more"></i></span>
-                <strong>Sentence Practice</strong>
-                <span>Say it, then check your accuracy</span>
-                <small><b id="homeAttemptCountCard">0</b> attempts</small>
-              </button>
-              <button class="quick-card quick-mistakes" type="button" data-nav="mistakes">
-                <span class="quick-icon"><i data-lucide="refresh-cw"></i></span>
-                <strong>Error Review</strong>
-                <span>Revisit the mistakes you repeat</span>
-                <small><b id="homeMistakeCountCard">0</b> to review</small>
-              </button>
-            </div>
+            <div class="home-materials-grid" id="frequentMaterialsPreview" aria-label="My materials"></div>
           </section>
         </section>
 
         <section class="view" data-view="materials" aria-labelledby="materialsTitle">
-          <div class="page-heading">
-            <div>
+          <div class="page-heading materials-page-heading">
+            <div class="materials-heading-main">
+              <button class="icon-button materials-back-button" id="materialsBackButton" type="button" aria-label="Back to materials" title="Back to materials" hidden>
+                <i data-lucide="arrow-left"></i>
+              </button>
               <h1 id="materialsTitle">Materials</h1>
             </div>
-            <div class="stat-strip" aria-label="Learning statistics">
-              <span><strong id="materialCount">0</strong> materials</span>
-              <span><strong id="chunkCount">0</strong> phrases</span>
-              <span><strong id="mistakeCount">0</strong> errors</span>
-            </div>
+            <button class="icon-button materials-edit-toggle" id="materialsEditToggle" type="button" aria-label="Edit materials" title="Edit materials">
+              <i data-lucide="pencil"></i>
+            </button>
           </div>
 
-          <div class="workspace-grid flow-layout">
-            <aside class="list-panel material-sidebar">
-              <div class="panel-title">
-                <div>
-                  <p class="section-label">Library</p>
-                  <h2>My Materials</h2>
-                </div>
-                <button class="secondary-button compact-action" id="manageAddMaterialButton" type="button">
-                  <i data-lucide="plus"></i>
-                  <span>Add</span>
-                </button>
-              </div>
-              <div id="materialsList" class="item-list"></div>
+          <section class="materials-gallery" id="materialsGallery" aria-label="My materials">
+            <div id="materialsList" class="home-materials-grid materials-module-grid"></div>
 
-              <section class="material-editor" id="materialImporter" hidden>
+            <section class="material-editor" id="materialImporter" hidden>
                 <div class="material-editor-head">
                   <div>
                     <p class="section-label" id="materialFormMode">New material</p>
@@ -188,13 +135,12 @@
                     <span id="materialSubmitLabel">Save Material</span>
                   </button>
                 </form>
-              </section>
-            </aside>
-
-            <section class="detail-panel material-workbench">
-              <div id="materialDetail" class="detail-empty"></div>
             </section>
-          </div>
+          </section>
+
+          <section class="detail-panel material-workbench material-detail-shell" id="materialDetailShell" hidden>
+            <div id="materialDetail" class="detail-empty"></div>
+          </section>
         </section>
 
         <section class="view" data-view="chunks" aria-labelledby="chunksTitle">
@@ -316,7 +262,7 @@
     <nav class="mobile-tabbar" aria-label="Mobile navigation">
       <button type="button" data-nav="materials"><i data-lucide="headphones"></i><span>Materials</span></button>
       <button type="button" data-nav="chunks"><i data-lucide="notebook-pen"></i><span>Phrase</span></button>
-      <button class="home-tab" type="button" data-nav="home"><span class="home-tab-icon"><i data-lucide="house"></i></span><span>Home</span></button>
+      <button class="home-tab" type="button" data-nav="home" aria-label="Home" title="Home"><span class="home-tab-icon"><i data-lucide="house"></i></span></button>
       <button type="button" data-nav="mistakes"><i data-lucide="refresh-cw"></i><span>Error</span></button>
       <button type="button" data-nav="profile"><i data-lucide="circle-user-round"></i><span>Profile</span></button>
     </nav>
