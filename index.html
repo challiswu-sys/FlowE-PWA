@@ -12,9 +12,9 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
     <link rel="icon" href="./assets/icon-192.png" sizes="192x192" type="image/png">
-    <link rel="stylesheet" href="./styles.css?v=materials-gallery-17">
+    <link rel="stylesheet" href="./styles.css?v=home-vocab-25">
     <script defer src="./assets/lucide.min.js"></script>
-    <script defer src="./app.js?v=materials-gallery-17"></script>
+    <script defer src="./app.js?v=home-vocab-25"></script>
   </head>
   <body>
     <div class="shell">
@@ -25,13 +25,13 @@
         </a>
 
         <nav class="nav compact-nav" aria-label="Main navigation">
-          <button class="nav-button" type="button" data-nav="materials">
-            <i data-lucide="headphones"></i>
-            <span>Materials</span>
-          </button>
           <button class="nav-button" type="button" data-nav="chunks">
             <i data-lucide="notebook-pen"></i>
             <span>Phrase</span>
+          </button>
+          <button class="nav-button" type="button" data-nav="vocabulary">
+            <i data-lucide="book-a"></i>
+            <span>Vocab</span>
           </button>
           <button class="nav-button" type="button" data-nav="mistakes">
             <i data-lucide="rotate-ccw"></i>
@@ -63,82 +63,49 @@
           </section>
 
           <section class="journey-section" aria-labelledby="journeyTitle">
-            <div class="section-heading-row">
-              <h2 id="journeyTitle">My Materials</h2>
+            <div class="section-heading-row home-materials-heading">
+              <h2 id="journeyTitle">Materials</h2>
+              <button class="icon-button home-materials-edit-toggle" id="homeMaterialsEditToggle" type="button" aria-label="Edit materials" title="Edit materials">
+                <i data-lucide="pencil"></i>
+              </button>
             </div>
             <div class="home-materials-grid" id="frequentMaterialsPreview" aria-label="My materials"></div>
+
+            <section class="material-editor" id="materialImporter" hidden>
+              <div class="material-editor-head">
+                <div>
+                  <p class="section-label" id="materialFormMode">New material</p>
+                  <h3 id="materialFormTitle">Add Material</h3>
+                </div>
+                <button class="icon-button" id="cancelMaterialEditButton" type="button" aria-label="Close material editor" title="Close material editor">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+              <form id="materialForm" class="form-stack">
+                <label><span>Title</span><input id="materialTitle" type="text" placeholder="e.g. AI podcast episode 01" required></label>
+                <label><span>Source link</span><input id="materialSource" type="url" placeholder="https://..."></label>
+                <label><span>Video file</span><input id="videoInput" type="file"><span class="current-file-row"><small class="current-file" id="currentVideoFile"></small><button class="remove-current-file" data-remove-material-file="video" type="button" hidden>Remove</button></span></label>
+                <label><span>Audio file</span><input id="audioInput" type="file"><span class="current-file-row"><small class="current-file" id="currentAudioFile"></small><button class="remove-current-file" data-remove-material-file="audio" type="button" hidden>Remove</button></span></label>
+                <label><span>Cover image</span><input id="coverInput" type="file"><span class="current-file-row"><small class="current-file" id="currentCoverFile"></small><button class="remove-current-file" data-remove-material-file="cover" type="button" hidden>Remove</button></span></label>
+                <label><span>Subtitle / transcript file</span><input id="transcriptInput" type="file"><span class="current-file-row"><small class="current-file" id="currentTranscriptFile"></small><button class="remove-current-file" data-remove-material-file="transcript" type="button" hidden>Remove</button></span></label>
+                <label><span>Transcript</span><textarea id="transcriptText" rows="6" placeholder="Paste a transcript or upload a .txt, .srt or .vtt file"></textarea></label>
+                <p class="small-note">On iPhone, choose each file separately from the Files app.</p>
+                <button class="primary-button" type="submit"><i data-lucide="save"></i><span id="materialSubmitLabel">Save Material</span></button>
+              </form>
+            </section>
           </section>
         </section>
 
         <section class="view" data-view="materials" aria-labelledby="materialsTitle">
           <div class="page-heading materials-page-heading">
             <div class="materials-heading-main">
-              <button class="icon-button materials-back-button" id="materialsBackButton" type="button" aria-label="Back to materials" title="Back to materials" hidden>
+              <button class="icon-button materials-back-button" id="materialsBackButton" type="button" aria-label="Back to home" title="Back to home">
                 <i data-lucide="arrow-left"></i>
               </button>
-              <h1 id="materialsTitle">Materials</h1>
+              <h1 id="materialsTitle">Material</h1>
             </div>
-            <button class="icon-button materials-edit-toggle" id="materialsEditToggle" type="button" aria-label="Edit materials" title="Edit materials">
-              <i data-lucide="pencil"></i>
-            </button>
           </div>
-
-          <section class="materials-gallery" id="materialsGallery" aria-label="My materials">
-            <div id="materialsList" class="home-materials-grid materials-module-grid"></div>
-
-            <section class="material-editor" id="materialImporter" hidden>
-                <div class="material-editor-head">
-                  <div>
-                    <p class="section-label" id="materialFormMode">New material</p>
-                    <h3 id="materialFormTitle">Add Material</h3>
-                  </div>
-                  <button class="icon-button" id="cancelMaterialEditButton" type="button" aria-label="Close material editor" title="Close material editor">
-                    <i data-lucide="x"></i>
-                  </button>
-                </div>
-                <form id="materialForm" class="form-stack">
-                  <label>
-                    <span>Title</span>
-                    <input id="materialTitle" type="text" placeholder="e.g. AI podcast episode 01" required>
-                  </label>
-                  <label>
-                    <span>Source link</span>
-                    <input id="materialSource" type="url" placeholder="https://...">
-                  </label>
-                  <label>
-                    <span>Video file</span>
-                    <input id="videoInput" type="file">
-                    <small class="current-file" id="currentVideoFile"></small>
-                  </label>
-                  <label>
-                    <span>Audio file</span>
-                    <input id="audioInput" type="file">
-                    <small class="current-file" id="currentAudioFile"></small>
-                  </label>
-                  <label>
-                    <span>Cover image</span>
-                    <input id="coverInput" type="file">
-                    <small class="current-file" id="currentCoverFile"></small>
-                  </label>
-                  <label>
-                    <span>Subtitle / transcript file</span>
-                    <input id="transcriptInput" type="file">
-                    <small class="current-file" id="currentTranscriptFile"></small>
-                  </label>
-                  <label>
-                    <span>Transcript</span>
-                    <textarea id="transcriptText" rows="6" placeholder="Paste a transcript or upload a .txt, .srt or .vtt file"></textarea>
-                  </label>
-                  <p class="small-note">On iPhone, choose each file separately from the Files app.</p>
-                  <button class="primary-button" type="submit">
-                    <i data-lucide="save"></i>
-                    <span id="materialSubmitLabel">Save Material</span>
-                  </button>
-                </form>
-            </section>
-          </section>
-
-          <section class="detail-panel material-workbench material-detail-shell" id="materialDetailShell" hidden>
+          <section class="detail-panel material-workbench material-detail-shell" id="materialDetailShell">
             <div id="materialDetail" class="detail-empty"></div>
           </section>
         </section>
@@ -178,6 +145,43 @@
           </div>
 
           <section id="sentenceStudio" class="sentence-studio"></section>
+        </section>
+
+        <section class="view" data-view="vocabulary" aria-labelledby="vocabularyTitle">
+          <div class="page-heading vocabulary-heading">
+            <div>
+              <p class="eyebrow">Personal Word Bank</p>
+              <h1 id="vocabularyTitle">Vocabulary</h1>
+            </div>
+            <button class="secondary-button compact-action" type="button" id="addVocabularyButton">
+              <i data-lucide="plus"></i>
+              <span>Add</span>
+            </button>
+          </div>
+
+          <section class="vocabulary-editor" id="vocabularyEditor" hidden>
+            <div class="material-editor-head">
+              <div>
+                <p class="section-label">New word</p>
+                <h2>Add to Vocabulary</h2>
+              </div>
+              <button class="icon-button" id="cancelVocabularyButton" type="button" aria-label="Close vocabulary editor" title="Close vocabulary editor">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+            <form id="vocabularyForm" class="form-stack">
+              <label><span>Word</span><input id="vocabWord" type="text" placeholder="e.g. substantial" required></label>
+              <label><span>Chinese meaning</span><input id="vocabChinese" type="text" placeholder="e.g. 大量的；实质性的" required></label>
+              <label><span>Part of speech</span><input id="vocabPartOfSpeech" type="text" placeholder="e.g. adjective" required></label>
+              <label><span>Word combinations</span><textarea id="vocabCollocations" rows="4" placeholder="One combination per line"></textarea></label>
+              <label><span>Example sentences</span><textarea id="vocabExamples" rows="4" placeholder="One sentence per line"></textarea></label>
+              <button class="primary-button" type="submit"><i data-lucide="save"></i><span>Save Word</span></button>
+            </form>
+          </section>
+
+          <section class="list-panel wide vocabulary-library">
+            <div id="vocabularyList" class="vocabulary-grid"></div>
+          </section>
         </section>
 
         <section class="view" data-view="mistakes" aria-labelledby="mistakesTitle">
@@ -260,8 +264,8 @@
     </div>
 
     <nav class="mobile-tabbar" aria-label="Mobile navigation">
-      <button type="button" data-nav="materials"><i data-lucide="headphones"></i><span>Materials</span></button>
       <button type="button" data-nav="chunks"><i data-lucide="notebook-pen"></i><span>Phrase</span></button>
+      <button type="button" data-nav="vocabulary"><i data-lucide="book-a"></i><span>Vocab</span></button>
       <button class="home-tab" type="button" data-nav="home" aria-label="Home" title="Home"><span class="home-tab-icon"><i data-lucide="house"></i></span></button>
       <button type="button" data-nav="mistakes"><i data-lucide="refresh-cw"></i><span>Error</span></button>
       <button type="button" data-nav="profile"><i data-lucide="circle-user-round"></i><span>Profile</span></button>

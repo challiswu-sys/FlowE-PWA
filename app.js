@@ -5,18 +5,21 @@ const DB_VERSION = 2;
 const BLOCKED_PUBLIC_MATERIAL_IDS = new Set(["xhs_6a25584d"]);
 
 let state = loadState();
-let activeView = "materials";
+let activeView = "home";
 let activeMaterialId = state.materials[0]?.id || null;
 let activeChunkId = state.chunks[0]?.id || null;
+let activeVocabularyId = null;
 let currentAnalysis = null;
 let latestFeedback = null;
 let activeCaptureId = null;
 let captureEditorOpen = false;
 let materialDetailOpen = false;
 let materialsEditMode = false;
+let vocabularyEditorOpen = false;
 let activePhraseDetailId = null;
 let activeErrorId = null;
 let editingMaterialId = null;
+let pendingMaterialFileRemovals = new Set();
 let sentenceComposerKey = null;
 let activeAudioUrl = null;
 let activeVideoUrl = null;
@@ -108,6 +111,7 @@ function loadState() {
         materials: parsed.materials || [],
         chunks: parsed.chunks || [],
         mistakes: parsed.mistakes || [],
+        vocabulary: parsed.vocabulary || [],
         attempts: parsed.attempts || [],
         practiceLog: parsed.practiceLog || {},
         profile: parsed.profile || {},
@@ -122,6 +126,7 @@ function loadState() {
     materials: [],
     chunks: [],
     mistakes: [],
+    vocabulary: [],
     attempts: [],
     practiceLog: {},
     profile: {},
@@ -177,6 +182,16 @@ function buildDemoPreviewState() {
 
   stuckChunk.analysis = buildChunkAnalysis(stuckChunk.phrase, stuckChunk.meaning, stuckChunk.sentence);
   storyChunk.analysis = buildChunkAnalysis(storyChunk.phrase, storyChunk.meaning, storyChunk.sentence);
+  const coversCapture = {
+    id: "demo_capture_covers",
+    phrase: "Get into the covers",
+    meaning: "钻进被窝",
+    sentence: "We brushed our teeth and got into the covers.",
+    analysis: buildChunkAnalysis("Get into the covers", "钻进被窝", "We brushed our teeth and got into the covers."),
+    linkedChunkId: "",
+    practiceHistory: [],
+    createdAt: now
+  };
 
   return {
     materials: [
@@ -196,6 +211,7 @@ function buildDemoPreviewState() {
           { start: 4, end: 9, text: "He wanted a specific inspiring story, not a vague answer." }
         ],
         captures: [
+          coversCapture,
           {
             id: "demo_capture_stuck",
             phrase: stuckChunk.phrase,
@@ -278,6 +294,44 @@ function buildDemoPreviewState() {
       }
     ],
     chunks: [stuckChunk, storyChunk],
+    vocabulary: [
+      {
+        id: "demo_vocab_substantial",
+        word: "substantial",
+        chinese: "大量的；实质性的",
+        partOfSpeech: "adjective",
+        collocations: ["substantial progress", "substantial evidence", "a substantial amount"],
+        examples: [
+          "She made substantial progress in her listening practice.",
+          "There is substantial evidence to support the idea."
+        ],
+        createdAt: now
+      },
+      {
+        id: "demo_vocab_innocuous",
+        word: "innocuous",
+        chinese: "无害的；看似普通的",
+        partOfSpeech: "adjective",
+        collocations: ["an innocuous comment", "seem innocuous", "an innocuous question"],
+        examples: [
+          "The question seemed innocuous at first.",
+          "It began as an innocuous comment."
+        ],
+        createdAt: now
+      },
+      {
+        id: "demo_vocab_accelerate",
+        word: "accelerate",
+        chinese: "加速；促进",
+        partOfSpeech: "verb",
+        collocations: ["accelerate growth", "accelerate the process", "rapidly accelerate"],
+        examples: [
+          "Regular review can accelerate your progress.",
+          "The new method accelerated the learning process."
+        ],
+        createdAt: now
+      }
+    ],
     mistakes: [
       {
         id: "demo_error_1",
@@ -364,11 +418,20 @@ function normalizeState(nextState) {
         morePractice: mistake.morePractice || []
       };
     });
+  const vocabulary = (nextState.vocabulary || []).map((item) => ({
+    ...item,
+    word: item.word || "",
+    chinese: item.chinese || "",
+    partOfSpeech: item.partOfSpeech || "",
+    collocations: Array.isArray(item.collocations) ? item.collocations : [],
+    examples: Array.isArray(item.examples) ? item.examples : []
+  }));
 
   return {
     materials,
     chunks,
     mistakes,
+    vocabulary,
     attempts: nextState.attempts || [],
     practiceLog: nextState.practiceLog || {},
     profile: {
@@ -419,7 +482,7 @@ function resetViewState(view) {
   sentenceComposerKey = null;
   latestFeedback = null;
 
-  if (view === "materials") {
+  if (view === "home") {
     activeCaptureId = null;
     captureEditorOpen = false;
     currentAnalysis = null;
@@ -432,6 +495,10 @@ function resetViewState(view) {
   }
   if (view === "mistakes") {
     activeErrorId = null;
+  }
+  if (view === "vocabulary") {
+    activeVocabularyId = null;
+    vocabularyEditorOpen = false;
   }
 }
 
@@ -466,6 +533,7 @@ function bindForms() {
     const coverFile = $("#coverInput").files?.[0] || null;
     const transcriptFile = $("#transcriptInput").files?.[0] || null;
     const transcript = $("#transcriptText").value.trim();
+    const removals = new Set(pendingMaterialFileRemovals);
 
     if (!title || !transcript) {
       toast("Add a title and transcript first");
@@ -480,13 +548,13 @@ function bindForms() {
     Object.assign(material, {
       title,
       source,
-      videoName: videoFile?.name || material.videoName || "",
-      videoType: videoFile?.type || material.videoType || "",
-      audioName: audioFile?.name || material.audioName || "",
-      audioType: audioFile?.type || material.audioType || "",
-      coverName: coverFile?.name || material.coverName || "",
-      coverType: coverFile?.type || material.coverType || "",
-      transcriptName: transcriptFile?.name || material.transcriptName || "",
+      videoName: videoFile?.name || (removals.has("video") ? "" : material.videoName || ""),
+      videoType: videoFile?.type || (removals.has("video") ? "" : material.videoType || ""),
+      audioName: audioFile?.name || (removals.has("audio") ? "" : material.audioName || ""),
+      audioType: audioFile?.type || (removals.has("audio") ? "" : material.audioType || ""),
+      coverName: coverFile?.name || (removals.has("cover") ? "" : material.coverName || ""),
+      coverType: coverFile?.type || (removals.has("cover") ? "" : material.coverType || ""),
+      transcriptName: transcriptFile?.name || (removals.has("transcript") ? "" : material.transcriptName || ""),
       transcript,
       segments: segmentTranscript(transcript),
       updatedAt: new Date().toISOString()
@@ -495,7 +563,10 @@ function bindForms() {
     await Promise.all([
       videoFile ? putFile("video", id, videoFile) : Promise.resolve(),
       audioFile ? putFile("audio", id, audioFile) : Promise.resolve(),
-      coverFile ? putFile("cover", id, coverFile) : Promise.resolve()
+      coverFile ? putFile("cover", id, coverFile) : Promise.resolve(),
+      removals.has("video") && !videoFile ? deleteFile("video", id) : Promise.resolve(),
+      removals.has("audio") && !audioFile ? deleteFile("audio", id) : Promise.resolve(),
+      removals.has("cover") && !coverFile ? deleteFile("cover", id) : Promise.resolve()
     ]);
 
     if (!existing) state.materials.unshift(material);
@@ -509,6 +580,39 @@ function bindForms() {
     renderAll();
     toast(existing ? "Material updated" : "Material saved");
   });
+
+  $("#vocabularyForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const word = $("#vocabWord").value.trim();
+    const chinese = $("#vocabChinese").value.trim();
+    const partOfSpeech = $("#vocabPartOfSpeech").value.trim();
+    if (!word || !chinese || !partOfSpeech) {
+      toast("Add the word, Chinese meaning and part of speech");
+      return;
+    }
+
+    const vocabularyItem = {
+      id: createId("voc"),
+      word,
+      chinese,
+      partOfSpeech,
+      collocations: splitLines($("#vocabCollocations").value),
+      examples: splitLines($("#vocabExamples").value),
+      createdAt: new Date().toISOString()
+    };
+    state.vocabulary.unshift(vocabularyItem);
+    activeVocabularyId = vocabularyItem.id;
+    vocabularyEditorOpen = false;
+    saveState();
+    $("#vocabularyForm").reset();
+    renderVocabulary();
+    renderIcons();
+    toast("Word saved");
+  });
+}
+
+function splitLines(value = "") {
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
 function openMaterialEditor(material = null) {
@@ -517,6 +621,7 @@ function openMaterialEditor(material = null) {
   if (!editor || !form) return;
 
   editingMaterialId = material?.id || null;
+  pendingMaterialFileRemovals = new Set();
   materialDetailOpen = false;
   form.reset();
   $("#materialTitle").value = material?.title || "";
@@ -525,10 +630,10 @@ function openMaterialEditor(material = null) {
   setText("#materialFormMode", material ? "Edit material" : "New material");
   setText("#materialFormTitle", material ? "Edit Material" : "Add Material");
   setText("#materialSubmitLabel", material ? "Save Changes" : "Save Material");
-  setCurrentFile("#currentVideoFile", material?.videoName);
-  setCurrentFile("#currentAudioFile", material?.audioName);
-  setCurrentFile("#currentCoverFile", material?.coverName);
-  setCurrentFile("#currentTranscriptFile", material?.transcriptName);
+  setCurrentFile("#currentVideoFile", material?.videoName, "video");
+  setCurrentFile("#currentAudioFile", material?.audioName, "audio");
+  setCurrentFile("#currentCoverFile", material?.coverName, "cover");
+  setCurrentFile("#currentTranscriptFile", material?.transcriptName, "transcript");
   editor.hidden = false;
   editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
   window.setTimeout(() => $("#materialTitle")?.focus(), 180);
@@ -539,13 +644,17 @@ function closeMaterialEditor() {
   const editor = $("#materialImporter");
   const form = $("#materialForm");
   editingMaterialId = null;
+  pendingMaterialFileRemovals = new Set();
   if (editor) editor.hidden = true;
   form?.reset();
   ["#currentVideoFile", "#currentAudioFile", "#currentCoverFile", "#currentTranscriptFile"].forEach((selector) => setText(selector, ""));
+  $$('[data-remove-material-file]').forEach((button) => { button.hidden = true; });
 }
 
-function setCurrentFile(selector, filename) {
-  setText(selector, filename ? `Current: ${filename}. Choose a new file only to replace it.` : "");
+function setCurrentFile(selector, filename, kind) {
+  setText(selector, filename ? `Saved: ${filename}` : "No file saved");
+  const button = $(`[data-remove-material-file="${kind}"]`);
+  if (button) button.hidden = !filename;
 }
 
 function bindActions() {
@@ -568,10 +677,25 @@ function bindActions() {
   });
 
   $("#cancelMaterialEditButton")?.addEventListener("click", closeMaterialEditor);
-  $("#materialsEditToggle")?.addEventListener("click", () => {
+  $$('[data-remove-material-file]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const kind = button.dataset.removeMaterialFile;
+      pendingMaterialFileRemovals.add(kind);
+      const selector = {
+        video: "#currentVideoFile",
+        audio: "#currentAudioFile",
+        cover: "#currentCoverFile",
+        transcript: "#currentTranscriptFile"
+      }[kind];
+      setText(selector, "Will be removed when you save");
+      if (kind === "transcript") $("#transcriptText").value = "";
+      button.hidden = true;
+    });
+  });
+  $("#homeMaterialsEditToggle")?.addEventListener("click", () => {
     materialsEditMode = !materialsEditMode;
     closeMaterialEditor();
-    renderMaterials();
+    renderHomeDashboard();
     renderIcons();
   });
   $("#materialsBackButton")?.addEventListener("click", () => {
@@ -580,8 +704,19 @@ function bindActions() {
     captureEditorOpen = false;
     currentAnalysis = null;
     latestFeedback = null;
-    renderMaterials();
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+    switchView("home", { resetDetail: true, scrollTop: true });
+  });
+
+  $("#addVocabularyButton")?.addEventListener("click", () => {
+    vocabularyEditorOpen = true;
+    activeVocabularyId = null;
+    renderVocabulary();
+    window.requestAnimationFrame(() => $("#vocabWord")?.focus());
+  });
+  $("#cancelVocabularyButton")?.addEventListener("click", () => {
+    vocabularyEditorOpen = false;
+    $("#vocabularyForm")?.reset();
+    renderVocabulary();
   });
 
   $("#practiceSummaryToggle")?.addEventListener("click", () => {
@@ -601,6 +736,7 @@ function bindActions() {
         materials: imported.materials || [],
         chunks: imported.chunks || [],
         mistakes: imported.mistakes || [],
+        vocabulary: imported.vocabulary || [],
         attempts: imported.attempts || [],
         practiceLog: imported.practiceLog || {},
         profile: imported.profile || {},
@@ -608,6 +744,7 @@ function bindActions() {
       });
       activeMaterialId = state.materials[0]?.id || null;
       activeChunkId = state.chunks[0]?.id || null;
+      activeVocabularyId = null;
       currentAnalysis = null;
       latestFeedback = null;
       saveState();
@@ -624,6 +761,7 @@ function renderAll() {
   renderStats();
   renderMaterials();
   renderChunks();
+  renderVocabulary();
   renderSentenceStudio();
   renderMistakes();
   renderHomeDashboard();
@@ -743,16 +881,34 @@ async function renderFrequentMaterials() {
         ? `<img data-local-cover="${escapeAttribute(material.id)}" alt="">`
       : `<span class="preview-letter">${escapeHtml((material.title || "M").slice(0, 1).toUpperCase())}</span>`;
     return `
-      <button class="home-material-tile" type="button" data-home-material="${escapeAttribute(material.id)}" aria-label="Open ${escapeAttribute(material.title)}">
-        <span class="home-material-cover material-tone-${(index % 3) + 1}">${poster}</span>
-        <span class="home-material-title">${escapeHtml(material.title)}</span>
-      </button>
+      <article class="home-material-card">
+        <button class="home-material-tile" type="button" data-home-material="${escapeAttribute(material.id)}" aria-label="Open ${escapeAttribute(material.title)}">
+          <span class="home-material-cover material-tone-${(index % 3) + 1}">${poster}</span>
+          <span class="home-material-title">${escapeHtml(material.title)}</span>
+        </button>
+        ${materialsEditMode ? `
+          <div class="material-tile-actions">
+            <button class="icon-button" type="button" data-edit-home-material="${escapeAttribute(material.id)}" aria-label="Edit ${escapeAttribute(material.title)}" title="Edit material"><i data-lucide="pencil"></i></button>
+            <button class="icon-button danger-icon" type="button" data-delete-home-material="${escapeAttribute(material.id)}" aria-label="Delete ${escapeAttribute(material.title)}" title="Delete material"><i data-lucide="trash-2"></i></button>
+          </div>
+        ` : ""}
+      </article>
     `;
   }).join("") + `
-    <button class="home-material-tile home-add-material" type="button" id="homeAddMaterialButton" aria-label="Add material" title="Add material">
+    <button class="home-material-card home-material-tile home-add-material" type="button" id="homeAddMaterialButton" aria-label="Add material" title="Add material">
       <span class="home-material-cover"><i data-lucide="plus"></i></span>
+      <span class="home-material-title">Add Material</span>
     </button>
   `;
+
+  const editToggle = $("#homeMaterialsEditToggle");
+  if (editToggle) {
+    editToggle.classList.toggle("is-active", materialsEditMode);
+    editToggle.setAttribute("aria-pressed", String(materialsEditMode));
+    editToggle.setAttribute("aria-label", materialsEditMode ? "Finish editing materials" : "Edit materials");
+    editToggle.setAttribute("title", materialsEditMode ? "Finish editing" : "Edit materials");
+    editToggle.innerHTML = `<i data-lucide="${materialsEditMode ? "check" : "pencil"}"></i>`;
+  }
 
   await Promise.all(materials.map(async (material) => {
     if (!material.coverName || material.posterPath) return;
@@ -779,8 +935,18 @@ async function renderFrequentMaterials() {
   });
 
   $("#homeAddMaterialButton", container)?.addEventListener("click", () => {
-    switchView("materials", { resetDetail: true, scrollTop: true });
-    window.requestAnimationFrame(() => openMaterialEditor());
+    openMaterialEditor();
+  });
+
+  $$('[data-edit-home-material]', container).forEach((button) => {
+    button.addEventListener("click", () => {
+      const material = state.materials.find((item) => item.id === button.dataset.editHomeMaterial);
+      if (material) openMaterialEditor(material);
+    });
+  });
+
+  $$('[data-delete-home-material]', container).forEach((button) => {
+    button.addEventListener("click", () => deleteMaterialById(button.dataset.deleteHomeMaterial));
   });
 
   renderIcons();
@@ -1147,12 +1313,46 @@ function renderPreservingScroll(renderAction, anchorSelector = "") {
 }
 
 function renderMaterials() {
+  const detailShell = $("#materialDetailShell");
+  const detail = $("#materialDetail");
+  if (!detailShell || !detail) return;
+
+  if (state.materials.length && (!activeMaterialId || !state.materials.some((item) => item.id === activeMaterialId))) {
+    activeMaterialId = state.materials[0].id;
+  }
+  detailShell.hidden = activeView !== "materials";
+  if (activeView !== "materials") return;
+  if (!materialDetailOpen || !activeMaterialId) {
+    detail.className = "detail-empty";
+    detail.textContent = "Select a material from Home.";
+    return;
+  }
+  renderMaterialDetail();
+}
+
+function renderMaterialsLegacy() {
   const list = $("#materialsList");
   const gallery = $("#materialsGallery");
   const detailShell = $("#materialDetailShell");
   const editToggle = $("#materialsEditToggle");
   const backButton = $("#materialsBackButton");
-  if (!list || !gallery || !detailShell || !editToggle || !backButton) return;
+  if (!list || !gallery || !editToggle) {
+    const detail = $("#materialDetail");
+    if (!detailShell || !backButton || !detail) return;
+    if (state.materials.length && (!activeMaterialId || !state.materials.some((item) => item.id === activeMaterialId))) {
+      activeMaterialId = state.materials[0].id;
+    }
+    detailShell.hidden = activeView !== "materials";
+    if (activeView !== "materials") return;
+    if (!materialDetailOpen || !activeMaterialId) {
+      detail.className = "detail-empty";
+      detail.textContent = "Select a material from Home.";
+      return;
+    }
+    renderMaterialDetail();
+    return;
+  }
+  if (!detailShell || !backButton) return;
 
   if (state.materials.length && (!activeMaterialId || !state.materials.some((item) => item.id === activeMaterialId))) {
     activeMaterialId = state.materials[0].id;
@@ -1259,6 +1459,25 @@ function renderMaterials() {
   renderIcons();
 }
 
+async function deleteMaterialById(id) {
+  const material = state.materials.find((item) => item.id === id);
+  if (!window.confirm(`Delete “${material?.title || "this material"}” and its locally stored media?`)) return;
+  state.materials = state.materials.filter((item) => item.id !== id);
+  state.chunks = state.chunks.map((chunk) =>
+    chunk.sourceMaterialId === id ? { ...chunk, sourceMaterialId: "", sourceTitle: "Deleted material" } : chunk
+  );
+  await Promise.all([
+    deleteFile("audio", id),
+    deleteFile("video", id),
+    deleteFile("cover", id)
+  ]);
+  activeMaterialId = state.materials[0]?.id || null;
+  activeCaptureId = null;
+  saveState();
+  renderAll();
+  toast("Material deleted");
+}
+
 async function loadMaterialListCovers(container, materials) {
   const renderId = ++materialListRenderId;
   materialListCoverUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -1353,20 +1572,7 @@ async function renderMaterialDetail() {
     </details>
 
     <section class="material-phrases" aria-labelledby="capturedPhrasesTitle">
-      <div class="phrase-section-head">
-        <div>
-          <h2 id="capturedPhrasesTitle">Captured Phrases <span>${material.captures.length}</span></h2>
-        </div>
-        ${captureEditorOpen || !material.captures.length ? "" : `
-          <button class="compact-action add-phrase-button" type="button" id="addPhraseButton">
-            <i data-lucide="plus"></i>
-            <span>Add</span>
-          </button>
-        `}
-      </div>
-
-      ${captureEditorOpen || !material.captures.length ? renderCaptureEditor(Boolean(material.captures.length)) : ""}
-      ${renderCapturedPhraseList(material, activeCapture)}
+      ${renderMaterialPhraseSectionContent(material, activeCapture)}
     </section>
   `;
 
@@ -1411,6 +1617,54 @@ async function renderMaterialDetail() {
   renderIcons();
 }
 
+function renderMaterialPhraseSectionContent(material, activeCapture = null) {
+  return `
+    <div class="phrase-section-head">
+      <div>
+        <h2 id="capturedPhrasesTitle">Captured Phrases <span>${material.captures.length}</span></h2>
+      </div>
+      ${captureEditorOpen || !material.captures.length ? "" : `
+        <button class="compact-action add-phrase-button" type="button" id="addPhraseButton">
+          <i data-lucide="plus"></i>
+          <span>Add</span>
+        </button>
+      `}
+    </div>
+    ${captureEditorOpen || !material.captures.length ? renderCaptureEditor(Boolean(material.captures.length)) : ""}
+    ${renderCapturedPhraseList(material, activeCapture)}
+  `;
+}
+
+function refreshMaterialPhraseSection(material) {
+  const section = $(".material-phrases", $("#materialDetail"));
+  if (!section) return;
+  const activeCapture = material.captures.find((capture) => capture.id === activeCaptureId) || null;
+  const scrollTop = Math.max(window.scrollY || 0, document.scrollingElement?.scrollTop || 0);
+  const scrollingElement = document.scrollingElement;
+  if (scrollingElement) scrollingElement.style.overflowAnchor = "none";
+  section.innerHTML = renderMaterialPhraseSectionContent(material, activeCapture);
+  bindMaterialPhraseEvents(material);
+  renderIcons();
+  const restore = () => window.scrollTo({ top: scrollTop, left: 0, behavior: "auto" });
+  restore();
+  window.requestAnimationFrame(() => {
+    restore();
+    if (scrollingElement) scrollingElement.style.overflowAnchor = "";
+  });
+}
+
+function scrollSubtitleRowToTop(panel, activeRow) {
+  if (!panel || !activeRow) return;
+  const align = () => {
+    const panelRect = panel.getBoundingClientRect();
+    const rowRect = activeRow.getBoundingClientRect();
+    const rowTop = panel.scrollTop + rowRect.top - panelRect.top;
+    panel.scrollTop = Math.max(0, rowTop - 14);
+  };
+  align();
+  window.requestAnimationFrame(align);
+}
+
 function bindSubtitleSync(material, video, audio) {
   const drawer = $("#subtitleDrawer");
   const panel = $("#transcriptPanel");
@@ -1431,7 +1685,10 @@ function bindSubtitleSync(material, video, audio) {
       activeIndex = -1;
       return;
     }
-    if (nextIndex === activeIndex) return;
+    if (nextIndex === activeIndex) {
+      if (drawer.open && rows[nextIndex]) scrollSubtitleRowToTop(panel, rows[nextIndex]);
+      return;
+    }
 
     rows[activeIndex]?.classList.remove("is-current");
     const activeRow = rows[nextIndex];
@@ -1439,8 +1696,7 @@ function bindSubtitleSync(material, video, audio) {
     activeIndex = nextIndex;
 
     if (drawer.open && activeRow) {
-      const targetTop = activeRow.offsetTop - (panel.clientHeight - activeRow.offsetHeight) / 2;
-      panel.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      scrollSubtitleRowToTop(panel, activeRow);
     }
   };
 
@@ -1456,14 +1712,21 @@ function bindSubtitleSync(material, video, audio) {
   });
 
   drawer.addEventListener("toggle", () => {
-    if (!drawer.open || activeIndex < 0) return;
-    const activeRow = rows[activeIndex];
-    if (!activeRow) return;
-    panel.scrollTop = Math.max(0, activeRow.offsetTop - (panel.clientHeight - activeRow.offsetHeight) / 2);
+    if (!drawer.open) return;
+    window.requestAnimationFrame(() => {
+      const availableMedia = [video, audio].filter(Boolean);
+      const currentMedia = availableMedia.find((media) => !media.paused)
+        || availableMedia.find((media) => Number.isFinite(media.currentTime) && media.currentTime > 0)
+        || availableMedia[0];
+      if (currentMedia) updateSubtitle(currentMedia);
+      if (activeIndex < 0) return;
+      const activeRow = rows[activeIndex];
+      scrollSubtitleRowToTop(panel, activeRow);
+    });
   });
 }
 
-function bindMaterialDetailEvents(material) {
+function bindMaterialPhraseEvents(material) {
   $$("[data-voice-target]", $("#materialDetail")).forEach((button) => {
     button.addEventListener("click", () => startVoiceInput(button.dataset.voiceTarget, button.dataset.voiceLang, button));
   });
@@ -1472,13 +1735,15 @@ function bindMaterialDetailEvents(material) {
     event.preventDefault();
     captureEditorOpen = true;
     activeCaptureId = null;
-    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
+    currentAnalysis = null;
+    latestFeedback = null;
+    refreshMaterialPhraseSection(material);
   });
 
   $("#cancelCaptureButton")?.addEventListener("click", (event) => {
     event.preventDefault();
     captureEditorOpen = false;
-    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
+    refreshMaterialPhraseSection(material);
   });
 
   $$('[data-open-capture]', $("#materialDetail")).forEach((button) => {
@@ -1486,7 +1751,11 @@ function bindMaterialDetailEvents(material) {
       const nextId = button.dataset.openCapture;
       activeCaptureId = activeCaptureId === nextId ? null : nextId;
       captureEditorOpen = false;
-      renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
+      const activeCapture = material.captures.find((capture) => capture.id === activeCaptureId) || null;
+      currentAnalysis = activeCapture ? captureAsAnalysis(activeCapture, material) : null;
+      activeChunkId = activeCapture?.linkedChunkId || "";
+      latestFeedback = activeCapture?.latestFeedback || null;
+      refreshMaterialPhraseSection(material);
     });
   });
 
@@ -1516,7 +1785,7 @@ function bindMaterialDetailEvents(material) {
     activeChunkId = "";
     latestFeedback = null;
     saveState();
-    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
+    refreshMaterialPhraseSection(material);
     toast("Phrase added to this material");
   });
 
@@ -1525,17 +1794,20 @@ function bindMaterialDetailEvents(material) {
     saveButton.addEventListener("click", saveCurrentChunk);
   }
 
-  bindSentencePracticeControls($("#materialDetail"));
-
   $("#deleteCaptureButton")?.addEventListener("click", () => {
     material.captures = material.captures.filter((capture) => capture.id !== activeCaptureId);
     activeCaptureId = null;
     currentAnalysis = null;
     latestFeedback = null;
     saveState();
-    renderPreservingScroll(() => renderMaterialDetail(), ".material-phrases");
+    refreshMaterialPhraseSection(material);
     toast("Phrase removed from this material");
   });
+
+}
+
+function bindMaterialDetailEvents(material) {
+  bindMaterialPhraseEvents(material);
 
   $$(".sentence-row", $("#transcriptPanel")).forEach((row) => {
     row.addEventListener("click", () => {
@@ -1618,14 +1890,6 @@ function renderCaptureWorkspace(capture) {
         ? `<span class="saved-confirmation"><i data-lucide="check"></i> Saved to Phrase Bank</span>`
         : `<button class="secondary-button" type="button" id="saveChunkButton"><i data-lucide="bookmark-plus"></i><span>Save to Phrase Bank</span></button>`}
     </div>
-    <section class="inline-sentence-practice practice-card">
-      ${renderPracticeCard(capture, {
-        showErrorAction: false,
-        heading: "Sentence Practice",
-        entries: capture.practiceHistory || [],
-        composerKey: `material:${capture.id}`
-      })}
-    </section>
     <button class="ghost-button remove-capture-button" type="button" id="deleteCaptureButton"><i data-lucide="trash-2"></i><span>Remove from this material</span></button>
   `;
 }
@@ -1713,7 +1977,7 @@ function renderPracticeCard(chunk, options = {}) {
         <h3>${escapeHtml(heading)}</h3>
         <p>${entries.length} ${entries.length === 1 ? "sentence" : "sentences"}</p>
       </div>
-      ${composerOpen ? "" : `<button class="secondary-button compact-action" type="button" data-add-sentence="${escapeAttribute(composerKey)}"><i data-lucide="plus"></i><span>Add Sentence</span></button>`}
+      ${composerOpen ? "" : `<button class="secondary-button compact-action sentence-add-button" type="button" data-add-sentence="${escapeAttribute(composerKey)}"><i data-lucide="plus"></i><span>Add</span></button>`}
     </div>
     ${renderSentenceEntries(entries)}
     ${composerOpen ? `
@@ -1726,7 +1990,7 @@ function renderPracticeCard(chunk, options = {}) {
           </div>
         </label>
         <div class="button-row">
-          <button class="primary-button" type="button" data-check-sentence><i data-lucide="check-circle-2"></i><span>Check Grammar and Naturalness</span></button>
+          <button class="primary-button" type="button" data-check-sentence><i data-lucide="check-circle-2"></i><span>Check</span></button>
           <button class="ghost-button" type="button" data-cancel-sentence><span>Cancel</span></button>
         </div>
       </section>
@@ -1741,9 +2005,11 @@ function renderSentenceEntries(entries = []) {
   return `
     <div class="sentence-entry-list">
       ${chronological.map((entry, index) => {
-        const rawCheck = entry.feedback?.notes?.[0]
-          || (entry.corrected === entry.sentence ? "Looks natural and complete." : "Review the improved version below.");
-        const check = rawCheck.includes("future AI connection") ? "Looks natural and complete." : rawCheck;
+        const corrected = (entry.corrected || entry.sentence || "").trim();
+        const original = (entry.sentence || "").trim();
+        const isCorrect = typeof entry.feedback?.isCorrect === "boolean"
+          ? entry.feedback.isCorrect
+          : corrected === original;
         return `
           <article class="sentence-entry">
             <div class="sentence-entry-head">
@@ -1751,14 +2017,15 @@ function renderSentenceEntries(entries = []) {
               <p>${escapeHtml(entry.sentence || "")}</p>
               <button class="icon-button danger-icon" type="button" data-delete-sentence="${escapeAttribute(entry.id)}" aria-label="Delete sentence ${index + 1}" title="Delete sentence"><i data-lucide="trash-2"></i></button>
             </div>
-            <div class="sentence-result-row">
-              <strong><i data-lucide="check-circle-2"></i> Check</strong>
-              <p>${escapeHtml(check)}</p>
+            <div class="sentence-check-status ${isCorrect ? "is-correct" : "needs-revision"}">
+              <strong><i data-lucide="${isCorrect ? "check" : "x"}"></i> ${isCorrect ? "Correct" : "Check"}</strong>
             </div>
-            <div class="sentence-result-row natural-version-row">
-              <strong><i data-lucide="sparkles"></i> More Natural Version</strong>
-              <p>${escapeHtml(entry.corrected || entry.sentence || "")}</p>
-            </div>
+            ${isCorrect ? "" : `
+              <div class="sentence-result-row natural-version-row">
+                <strong><i data-lucide="sparkles"></i> More Natural Version</strong>
+                <p>${escapeHtml(corrected)}</p>
+              </div>
+            `}
           </article>
         `;
       }).join("")}
@@ -1776,9 +2043,9 @@ function renderSentenceStudio() {
         <span class="card-icon"><i data-lucide="library"></i></span>
         <h2>Save a phrase from a material first</h2>
         <p>Sentence practice uses expressions captured from your materials.</p>
-        <button class="primary-button" type="button" data-nav="materials">
+        <button class="primary-button" type="button" data-nav="home">
           <i data-lucide="headphones"></i>
-          <span>Open Materials</span>
+          <span>Open Home</span>
         </button>
       </section>
     `;
@@ -1872,7 +2139,14 @@ function saveCurrentChunk() {
   activeChunkId = chunk.id;
   activePhraseDetailId = chunk.id;
   saveState();
-  renderPreservingScroll(() => renderAll(), ".material-phrases");
+  if (activeView === "materials" && material) {
+    renderStats();
+    renderChunks();
+    renderHomeDashboard();
+    refreshMaterialPhraseSection(material);
+  } else {
+    renderAll();
+  }
   toast("Saved to Phrase with its analysis and practice history");
 }
 
@@ -1898,14 +2172,17 @@ function bindSentencePracticeControls(scope) {
 }
 
 function rerenderCurrentPracticeView() {
-  const anchorSelector = activeView === "materials" ? ".material-phrases" : "";
+  if (activeView === "materials") {
+    const material = state.materials.find((item) => item.id === activeMaterialId);
+    if (material) refreshMaterialPhraseSection(material);
+    return;
+  }
   renderPreservingScroll(() => {
-    if (activeView === "materials") renderMaterialDetail();
-    else if (activeView === "chunks") renderChunks();
+    if (activeView === "chunks") renderChunks();
     else if (activeView === "mistakes") renderMistakes();
     else renderSentenceStudio();
     renderIcons();
-  }, anchorSelector);
+  });
 }
 
 function deletePracticeSentence(entryId) {
@@ -2278,6 +2555,7 @@ function renderChunks() {
       activeCaptureId = state.materials
         .find((material) => material.id === activeMaterialId)
         ?.captures?.find((capture) => capture.linkedChunkId === chunk.id)?.id || null;
+      materialDetailOpen = true;
       switchView("materials", { resetDetail: false, scrollTop: true });
     });
   });
@@ -2302,6 +2580,89 @@ function renderChunks() {
       renderPreservingScroll(() => renderAll());
       toast("Phrase deleted");
     });
+  });
+}
+
+function renderVocabulary() {
+  const list = $("#vocabularyList");
+  const editor = $("#vocabularyEditor");
+  if (!list || !editor) return;
+  editor.hidden = !vocabularyEditorOpen;
+
+  const words = state.vocabulary || [];
+  const activeWord = words.find((item) => item.id === activeVocabularyId) || null;
+  list.innerHTML = words.length ? `
+    <div class="vocabulary-card-grid">
+      ${words.map((item, index) => `
+        <button class="vocabulary-card vocab-tone-${(index % 4) + 1}" type="button" data-open-vocabulary="${escapeAttribute(item.id)}">
+          <span class="vocabulary-order">${String(index + 1).padStart(2, "0")}</span>
+          <strong>${escapeHtml(item.word)}</strong>
+          <small>${escapeHtml(item.partOfSpeech)}</small>
+          <p>${escapeHtml(item.chinese)}</p>
+        </button>
+      `).join("")}
+    </div>
+    ${activeWord ? `
+      <div class="phrase-detail-overlay" data-vocabulary-overlay role="dialog" aria-modal="true" aria-label="${escapeAttribute(activeWord.word)} details">
+        <section class="phrase-detail-sheet vocabulary-detail-sheet">
+          <div class="phrase-detail-head">
+            <div>
+              <p class="section-label">${escapeHtml(activeWord.partOfSpeech)}</p>
+              <h2>${escapeHtml(activeWord.word)}</h2>
+            </div>
+            <button class="icon-button" type="button" data-close-vocabulary aria-label="Close word details" title="Close word details"><i data-lucide="x"></i></button>
+          </div>
+          <section class="vocabulary-meaning-block">
+            <span>Chinese meaning</span>
+            <p>${escapeHtml(activeWord.chinese)}</p>
+          </section>
+          <section class="vocabulary-detail-section">
+            <h3>Word Combinations</h3>
+            <div class="vocabulary-collocations">
+              ${(activeWord.collocations || []).length
+                ? activeWord.collocations.map((phrase) => `<span>${escapeHtml(phrase)}</span>`).join("")
+                : `<p class="small-note">No word combinations yet.</p>`}
+            </div>
+          </section>
+          <section class="vocabulary-detail-section">
+            <h3>Examples</h3>
+            <div class="vocabulary-examples">
+              ${(activeWord.examples || []).length
+                ? activeWord.examples.map((sentence, index) => `<article><span>${index + 1}</span><p>${escapeHtml(sentence)}</p></article>`).join("")
+                : `<p class="small-note">No examples yet.</p>`}
+            </div>
+          </section>
+          <button class="ghost-button danger-text" type="button" data-delete-vocabulary="${escapeAttribute(activeWord.id)}"><i data-lucide="trash-2"></i><span>Delete Word</span></button>
+        </section>
+      </div>
+    ` : ""}
+  ` : `<div class="detail-empty compact-empty">Add a high-frequency word you want to remember.</div>`;
+
+  $$('[data-open-vocabulary]', list).forEach((button) => {
+    button.addEventListener("click", () => {
+      activeVocabularyId = button.dataset.openVocabulary;
+      renderVocabulary();
+      renderIcons();
+    });
+  });
+  $("[data-close-vocabulary]", list)?.addEventListener("click", () => {
+    activeVocabularyId = null;
+    renderVocabulary();
+    renderIcons();
+  });
+  $("[data-vocabulary-overlay]", list)?.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget) return;
+    activeVocabularyId = null;
+    renderVocabulary();
+    renderIcons();
+  });
+  $("[data-delete-vocabulary]", list)?.addEventListener("click", () => {
+    state.vocabulary = state.vocabulary.filter((item) => item.id !== activeVocabularyId);
+    activeVocabularyId = null;
+    saveState();
+    renderVocabulary();
+    renderIcons();
+    toast("Word deleted");
   });
 }
 
@@ -2367,12 +2728,12 @@ function getChineseMeaningReview(item, known) {
     return {
       status: "needs-correction",
       label: "Better meaning",
-      text: "Use the source sentence to confirm the exact Chinese meaning, then save a tighter version here."
+      text: meaning.trim()
     };
   }
 
   const chineseMatchCount = known.chineseKeywords.filter((keyword) => meaning.includes(keyword)).length;
-  const accurate = chineseMatchCount >= Math.min(2, known.chineseKeywords.length);
+  const accurate = chineseMatchCount >= 1;
   return accurate
     ? { status: "correct", label: "Correct", text: "Correct" }
     : {
@@ -2386,9 +2747,9 @@ function cleanEnglishDefinition(item, analysis) {
   if (analysis?.definition && !analysis.definition.startsWith("Learn “")) return analysis.definition;
   const phrase = item.phrase || "this phrase";
   if (item.sentence) {
-    return `In the source sentence, “${phrase}” should be understood as one complete expression. Use the surrounding words to confirm its exact meaning and tone.`;
+    return `“${phrase}” expresses the idea used in this context: ${item.sentence}`;
   }
-  return `A saved expression from your material. Learn “${phrase}” as one complete phrase, then confirm its exact meaning from the source context.`;
+  return `“${phrase}” is used as one complete expression rather than as separate translated words.`;
 }
 
 function renderPracticeHistory(entries = [], title = "Practice History") {
@@ -2578,10 +2939,67 @@ function buildChunkAnalysis(phrase, meaning, sourceSentence = "") {
 
 function getKnownChunk(phrase) {
   const lower = phrase.toLowerCase();
+  if (lower.includes("get into the covers") || lower.includes("getting into the covers") || lower.includes("get under the covers")) {
+    return {
+      keywords: ["bed", "covers", "blanket"],
+      chineseKeywords: ["钻进", "被窝", "被子", "床"],
+      suggestedChinese: "钻进被窝；躺进被子里",
+      definition: "To get into bed and move under the blankets, usually to sleep, rest, or keep warm.",
+      range: "An informal everyday expression used when talking about bedtime, resting, or getting comfortable in bed.",
+      collocations: "get into bed, get under the covers, crawl under the covers",
+      warning: "Get under the covers is more common than get into the covers in general English.",
+      examples: [
+        "We brushed our teeth and got under the covers.",
+        "I could not wait to get into bed and pull the covers up."
+      ]
+    };
+  }
+  if (lower.includes("sound insane") || lower.includes("sounds insane")) {
+    return {
+      keywords: ["seem", "crazy", "unbelievable"],
+      chineseKeywords: ["听来", "听起来", "疯狂", "荒谬", "难以置信"],
+      suggestedChinese: "在某人听来很疯狂、荒谬或难以置信",
+      definition: "To seem extremely unreasonable, shocking, or hard to believe to the person who hears the idea.",
+      range: "Informal and emphatic. It is often used before explaining an unusual claim, plan, or result.",
+      collocations: "sound insane to someone, this may sound insane, I know that sounds insane",
+      warning: "Sound describes how the idea seems to the listener; it does not refer to literal audio quality here.",
+      examples: [
+        "I know that sounds insane to most people.",
+        "The schedule sounds insane, but it worked for her."
+      ]
+    };
+  }
+  if (lower.includes("substantial progress") || lower.includes("significant progress")) {
+    return {
+      keywords: ["meaningful", "large", "improvement"],
+      chineseKeywords: ["显著", "实质", "重大", "进展", "进步"],
+      suggestedChinese: "取得显著的、实质性的进展",
+      definition: "To achieve a large and meaningful amount of improvement toward a goal.",
+      range: "Natural in work, study, training, projects, and any situation where improvement can be measured over time.",
+      collocations: "make substantial progress, show substantial progress, substantial progress toward a goal",
+      warning: "Use make progress, not do progress. Progress is normally uncountable in this meaning.",
+      examples: [
+        "You can make substantial progress in two focused weeks.",
+        "The team made substantial progress toward the launch."
+      ]
+    };
+  }
+  if (lower.includes("innocuous night")) {
+    return {
+      keywords: ["ordinary", "harmless", "uneventful"],
+      chineseKeywords: ["普通", "平常", "平淡", "无害", "没什么特别"],
+      suggestedChinese: "一个平常、看似没什么特别的夜晚",
+      definition: "An ordinary, harmless-looking night that does not initially seem important or eventful.",
+      range: "Often used in storytelling to contrast a calm beginning with something meaningful or unexpected that happens later.",
+      collocations: "an innocuous evening, a seemingly innocuous night, begin innocuously",
+      warning: "Innocuous means harmless or unlikely to cause concern; it does not simply mean boring.",
+      examples: ["It began as an innocuous night at home."]
+    };
+  }
   if (lower.includes("stuck with it") || lower.includes("stick with it") || lower.includes("stuck with")) {
     return {
       keywords: ["continue", "persist", "not give up"],
-      chineseKeywords: ["坚持", "继续", "没有放弃", "做"],
+      chineseKeywords: ["坚持", "继续", "没有放弃"],
       suggestedChinese: "坚持做下去；没有放弃它",
       definition: "Continued doing or supporting something despite difficulty, doubt or inconvenience. It is used when someone does not give up.",
       range: "",
@@ -2698,7 +3116,7 @@ function getKnownChunk(phrase) {
 function reviewMeaning(meaning, known) {
   if (!meaning.trim()) return "Write or dictate your understanding first.";
   if (!known) return "Your interpretation is saved. This version gives an initial assessment based on the source sentence.";
-  const hit = known.keywords.some((keyword) => meaning.includes(keyword));
+  const hit = known.chineseKeywords.some((keyword) => meaning.includes(keyword));
   return hit ? "Your interpretation is broadly accurate." : "Your interpretation may be incomplete. Compare it with the full meaning and refine it.";
 }
 
@@ -2752,7 +3170,8 @@ function analyseSentence(sentence, chunk) {
     focus = "Notice a phrase’s range of use, not only its literal meaning.";
   }
 
-  if (notes.length === 0) {
+  const isCorrect = notes.length === 0;
+  if (isCorrect) {
     notes.push("Looks natural and complete.");
   }
 
@@ -2760,6 +3179,7 @@ function analyseSentence(sentence, chunk) {
     original: sentence,
     corrected,
     notes,
+    isCorrect,
     focus,
     category: usedChunk ? "Grammar" : "Collocation"
   };
